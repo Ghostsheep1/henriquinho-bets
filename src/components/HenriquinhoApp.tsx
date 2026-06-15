@@ -53,9 +53,7 @@ const nav = [
   { id: "admin", label: "Admin", icon: BarChart3 },
 ];
 
-type AppUser = { name: string; email: string };
-
-const initialUser: AppUser = { name: "Henrique", email: "henrique@example.com" };
+type AppUser = { name: string; email: string; guest?: boolean };
 
 type SportsPayload = {
   configured: boolean;
@@ -89,6 +87,31 @@ function uid(prefix: string) {
 
 function payout(stake: number, odds: number) {
   return Math.round(stake * odds);
+}
+
+function resetLedger() {
+  return starterTransactions.map((transaction) => ({ ...transaction, id: uid("txn"), createdAt: new Date().toISOString() }));
+}
+
+function isFreshMarket(match: Match) {
+  const startsAt = new Date(match.startsAt).getTime();
+  if (!Number.isFinite(startsAt)) return match.status === "live";
+  if (match.status === "live") return true;
+  return startsAt >= Date.now() - 48 * 60 * 60 * 1000;
+}
+
+function isInPlayMarket(match: Match) {
+  const startsAt = new Date(match.startsAt).getTime();
+  if (match.status === "live") return true;
+  if (match.status !== "upcoming" || !Number.isFinite(startsAt)) return false;
+  const timeUntilStart = startsAt - Date.now();
+  return timeUntilStart >= 0 && timeUntilStart <= 24 * 60 * 60 * 1000;
+}
+
+function matchStatusLabel(match: Match) {
+  if (match.status === "live") return match.minute ? `LIVE ${match.minute}` : "LIVE";
+  if (isInPlayMarket(match)) return "Starting soon";
+  return match.status;
 }
 
 function parseScore(score?: string) {
@@ -179,7 +202,8 @@ function useLiveSports() {
 export default function HenriquinhoApp() {
   const [active, setActive] = useState("sports");
   const [menuOpen, setMenuOpen] = useState(false);
-  const [user, setUser] = useState<AppUser | null>(initialUser);
+  const [user, setUser] = useState<AppUser | null>(null);
+  const [hasEntered, setHasEntered] = useState(false);
   const [balance, setBalance] = useState(1000);
   const [transactions, setTransactions] = useState<Transaction[]>(starterTransactions);
   const [bets, setBets] = useState<Bet[]>([]);
@@ -278,8 +302,23 @@ export default function HenriquinhoApp() {
     addTransaction("deposit", amount, `Deposit ${uid("HB").toUpperCase()}`);
   };
 
+  const enterBeta = (profile: AppUser) => {
+    setUser(profile);
+    setBalance(1000);
+    setTransactions(resetLedger());
+    setBets([]);
+    setSlip([]);
+    setLastBonus(null);
+    setActive("sports");
+    setHasEntered(true);
+  };
+
   const winCount = bets.filter((bet) => bet.status === "won").length;
   const lossCount = bets.filter((bet) => bet.status === "lost").length;
+
+  if (!hasEntered) {
+    return <LoginGate onEnter={enterBeta} />;
+  }
 
   return (
     <div className="min-h-screen bg-[#070a0c] text-slate-100">
@@ -309,6 +348,50 @@ export default function HenriquinhoApp() {
       <Footer />
       <DepositModal open={depositOpen} onClose={() => setDepositOpen(false)} onComplete={completeDeposit} />
     </div>
+  );
+}
+
+function LoginGate({ onEnter }: { onEnter: (profile: AppUser) => void }) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    onEnter({ name: name.trim() || "Beta Player", email: email.trim() || "player@henriquinhobets.local" });
+  };
+  return (
+    <main className="min-h-screen bg-[#070a0c] text-slate-100">
+      <div className="fixed inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,.26),_transparent_34%),linear-gradient(135deg,_#050806_0%,_#0d1712_50%,_#171102_100%)]" />
+      <section className="mx-auto grid min-h-screen max-w-6xl items-center gap-8 px-5 py-10 lg:grid-cols-[minmax(0,1fr)_420px]">
+        <div>
+          <div className="mb-5 inline-flex items-center gap-2 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs font-black uppercase text-amber-200">
+            <Crown className="h-4 w-4" /> Beta access
+          </div>
+          <h1 className="text-5xl font-black text-white sm:text-7xl">Henriquinho<span className="text-amber-300">Bets</span></h1>
+          <p className="mt-4 max-w-2xl text-lg text-slate-300">Login, create a beta profile, or join as a guest to test live markets, wallet history, and the casino lobby.</p>
+          <div className="mt-6 grid max-w-2xl gap-3 sm:grid-cols-3">
+            {["$1,000 starter balance", "Live and upcoming odds", "110 casino games"].map((item) => (
+              <div key={item} className="rounded-md border border-white/10 bg-white/[0.04] p-4 text-sm font-bold text-emerald-100">{item}</div>
+            ))}
+          </div>
+        </div>
+        <form onSubmit={submit} className="rounded-md border border-white/10 bg-[#0b1210] p-5 shadow-2xl">
+          <LogIn className="mb-3 h-8 w-8 text-emerald-300" />
+          <h2 className="text-2xl font-black text-white">Enter HenriquinhoBets</h2>
+          <p className="mt-1 text-sm text-slate-400">Supabase auth hooks are ready; this beta profile starts with fresh testing funds.</p>
+          <label className="mt-5 block text-xs uppercase text-slate-400">
+            Name
+            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" className="mt-1 w-full rounded-md border border-white/10 bg-black/30 px-3 py-3 text-base text-white" />
+          </label>
+          <label className="mt-3 block text-xs uppercase text-slate-400">
+            Email
+            <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" className="mt-1 w-full rounded-md border border-white/10 bg-black/30 px-3 py-3 text-base text-white" />
+          </label>
+          <button className="mt-5 w-full rounded-md bg-emerald-400 py-3 font-black text-black">Login / Create beta account</button>
+          <button type="button" onClick={() => onEnter({ name: "Guest Player", email: "guest@henriquinhobets.local", guest: true })} className="mt-3 w-full rounded-md border border-amber-200/40 bg-amber-300/10 py-3 font-black text-amber-100">Join as guest</button>
+          <div className="mt-4 rounded-md bg-black/25 px-3 py-3 text-xs text-slate-400">Guest mode is for beta testing only. Hosted Supabase accounts can be connected after launch.</div>
+        </form>
+      </section>
+    </main>
   );
 }
 
