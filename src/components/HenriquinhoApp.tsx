@@ -174,9 +174,17 @@ function useLiveSports() {
           byId.set(match.id, existing ? { ...existing, ...match, odds: match.odds ?? existing.odds } : match);
         }
 
+        const freshMatches = Array.from(byId.values())
+          .filter(isFreshMarket)
+          .sort((a, b) => {
+            if (a.status === "live" && b.status !== "live") return -1;
+            if (a.status !== "live" && b.status === "live") return 1;
+            return new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime();
+          });
+
         if (!active) return;
-        setMatches(Array.from(byId.values()).sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime()));
-        setWorldCup(football.worldCup ?? []);
+        setMatches(freshMatches);
+        setWorldCup((football.worldCup ?? []).filter(isFreshMarket));
         setMessage(!odds.configured || !football.configured ? "Odds updating soon" : odds.message === "ok" || football.message === "ok" ? "Live markets loaded" : "Odds updating soon");
       } catch {
         if (!active) return;
@@ -432,14 +440,19 @@ function Header({ user, balance, soundOn, setSoundOn, onMenu, onDeposit }: { use
 }
 
 function LiveTicker({ matches, message }: { matches: Match[]; message: string }) {
+  const tickerMatches = useMemo(() => {
+    const activeMarkets = matches.filter((match) => match.status === "live" || isInPlayMarket(match));
+    return (activeMarkets.length ? activeMarkets : matches).slice(0, 24);
+  }, [matches]);
   return (
     <div className="sticky top-0 z-40 overflow-hidden border-b border-emerald-300/20 bg-[#040706] py-2 text-xs">
       <div className="animate-marquee whitespace-nowrap text-slate-300">
         {matches.length === 0 && <span className="mx-6 text-amber-200">{message}</span>}
-        {matches.slice(0, 24).map((match) => (
+        {tickerMatches.map((match) => (
           <span key={match.id} className="mx-6">
-            <span className="text-emerald-300">{match.status === "live" ? "LIVE" : match.league}</span> {match.home} vs {match.away}{" "}
-            <span className="text-amber-200">{match.score ?? (match.odds ? `${match.odds.moneyline.home}/${match.odds.moneyline.away}` : dateTime.format(new Date(match.startsAt)))}</span>
+            <span className={clsx("font-black", match.status === "live" ? "text-red-300" : "text-emerald-300")}>{matchStatusLabel(match)}</span>{" "}
+            <span className="text-slate-400">{match.league}</span> {match.home} vs {match.away}{" "}
+            <span className="text-amber-200">{match.score ?? (match.status === "upcoming" ? dateTime.format(new Date(match.startsAt)) : match.odds ? `${match.odds.moneyline.home}/${match.odds.moneyline.away}` : dateTime.format(new Date(match.startsAt)))}</span>
           </span>
         ))}
       </div>
@@ -507,7 +520,7 @@ function Sportsbook({ liveOnly, matches, worldCup, loading, message, slip, setSl
   const [sport, setSport] = useState<SportKey | "all">("all");
   const [league, setLeague] = useState("All leagues");
   const filteredMatches = useMemo(
-    () => matches.filter((match) => (sport === "all" || match.sport === sport) && (league === "All leagues" || match.league === league) && (!liveOnly || match.status === "live")),
+    () => matches.filter((match) => (sport === "all" || match.sport === sport) && (league === "All leagues" || match.league === league) && (!liveOnly || isInPlayMarket(match))),
     [league, liveOnly, matches, sport],
   );
   const addPick = (pick: BetPick) => {
@@ -518,6 +531,7 @@ function Sportsbook({ liveOnly, matches, worldCup, loading, message, slip, setSl
     <section className="space-y-4">
       <WorldCupPanel matches={worldCup} loading={loading} message={message} />
       <div className="flex flex-wrap items-center gap-2">
+        {liveOnly && <div className="mr-2 rounded-md border border-red-300/20 bg-red-500/10 px-3 py-2 text-sm font-bold text-red-100">Live now + starting in 24h</div>}
         {(Object.keys(sportLabels) as Array<SportKey | "all">).map((key) => (
           <button key={key} onClick={() => setSport(key)} className={clsx("rounded-md border px-3 py-2 text-sm font-semibold", sport === key ? "border-emerald-300 bg-emerald-400 text-black" : "border-white/10 bg-white/5 text-slate-300")}>{sportLabels[key]}</button>
         ))}
@@ -540,7 +554,7 @@ function Sportsbook({ liveOnly, matches, worldCup, loading, message, slip, setSl
             {featuredLeagues.map((item) => (
               <div key={item} className="flex items-center justify-between rounded-md bg-black/20 px-3 py-2">
                 <span>{item}</span>
-                <span className="text-emerald-300">Live</span>
+                <span className="text-emerald-300">Tracked</span>
               </div>
             ))}
           </div>
@@ -555,10 +569,10 @@ function WorldCupPanel({ matches, loading, message }: { matches: Match[]; loadin
     <section className="rounded-md border border-amber-300/20 bg-[linear-gradient(135deg,_rgba(5,150,105,.22),_rgba(251,191,36,.12))] p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <div className="text-xs font-black uppercase text-amber-200">Featured Tournament</div>
-          <h2 className="text-2xl font-black text-white">FIFA World Cup 2026</h2>
+          <div className="text-xs font-black uppercase text-amber-200">Featured Tournaments</div>
+          <h2 className="text-2xl font-black text-white">World Cup, Euros, Olympics</h2>
         </div>
-        <div className="rounded-md border border-white/10 bg-black/25 px-3 py-2 text-sm text-slate-200">USA - Canada - Mexico</div>
+        <div className="rounded-md border border-white/10 bg-black/25 px-3 py-2 text-sm text-slate-200">Global soccer majors</div>
       </div>
       {loading && <div className="mt-4 grid gap-3 md:grid-cols-3">{[1, 2, 3].map((item) => <div key={item} className="h-24 animate-pulse rounded-md bg-white/10" />)}</div>}
       {!loading && matches.length === 0 && <div className="mt-4 rounded-md bg-black/25 p-4 text-sm text-amber-100">{message}. ESPN scoreboards are updating soon.</div>}
@@ -567,6 +581,7 @@ function WorldCupPanel({ matches, loading, message }: { matches: Match[]; loadin
           {matches.slice(0, 6).map((match) => (
             <div key={match.id} className="rounded-md bg-black/25 p-3">
               <div className="text-xs uppercase text-emerald-300">{match.status}</div>
+              <div className="text-xs uppercase text-amber-200">{match.league}</div>
               <div className="mt-1 font-black text-white">{match.home} vs {match.away}</div>
               <div className="text-sm text-slate-300">{match.score ?? dateTime.format(new Date(match.startsAt))}</div>
             </div>
@@ -596,7 +611,8 @@ function EmptyMarkets({ message }: { message: string }) {
 
 function MatchCard({ match, addPick, slip }: { match: Match; addPick: (pick: BetPick) => void; slip: BetPick[] }) {
   const event = `${match.home} vs ${match.away}`;
-  const picks: BetPick[] = match.odds ? [
+  const bettingOpen = match.status === "live" || match.status === "upcoming";
+  const picks: BetPick[] = match.odds && bettingOpen ? [
     { id: `${match.id}-home`, matchId: match.id, label: match.home, market: "moneyline", odds: match.odds.moneyline.home, event },
     ...(match.odds.moneyline.draw ? [{ id: `${match.id}-draw`, matchId: match.id, label: "Draw", market: "moneyline" as const, odds: match.odds.moneyline.draw, event }] : []),
     { id: `${match.id}-away`, matchId: match.id, label: match.away, market: "moneyline", odds: match.odds.moneyline.away, event },
@@ -614,16 +630,16 @@ function MatchCard({ match, addPick, slip }: { match: Match; addPick: (pick: Bet
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex flex-wrap items-center gap-2 text-xs uppercase text-slate-400">
-            <span className={clsx("rounded px-2 py-1 font-bold", match.status === "live" ? "bg-red-500/20 text-red-200" : "bg-white/10")}>{match.status}</span>
+            <span className={clsx("rounded px-2 py-1 font-bold", match.status === "live" ? "bg-red-500/20 text-red-200" : isInPlayMarket(match) ? "bg-amber-300/20 text-amber-100" : "bg-white/10")}>{matchStatusLabel(match)}</span>
             <span>{match.league}</span>
             <span>{match.country}</span>
           </div>
           <h3 className="mt-2 text-lg font-black text-white">{event}</h3>
           <p className="text-sm text-slate-400">{match.score ?? dateTime.format(new Date(match.startsAt))} {match.minute ? `- ${match.minute}` : ""}</p>
         </div>
-        <div className="rounded-md bg-emerald-400/10 px-3 py-2 text-sm font-bold text-emerald-200">{match.odds ? "Realtime odds" : "Odds updating soon"}</div>
+        <div className="rounded-md bg-emerald-400/10 px-3 py-2 text-sm font-bold text-emerald-200">{bettingOpen && match.odds ? "Realtime odds" : match.status === "finished" ? "Final" : "Odds updating soon"}</div>
       </div>
-      {picks.length === 0 && <div className="mt-4 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-3 text-sm text-amber-100">Odds updating soon</div>}
+      {picks.length === 0 && <div className="mt-4 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-3 text-sm text-amber-100">{bettingOpen ? "Odds updating soon" : "Betting closed"}</div>}
       <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {picks.map((pick) => {
           const selected = slip.some((item) => item.id === pick.id);
@@ -697,7 +713,7 @@ function Casino({ balance, soundOn, onResult }: { balance: number; soundOn: bool
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {visibleGames.map(([name, group], index) => (
             <button key={`${name}-${index}`} onClick={() => setSelectedGame(name)} className="group overflow-hidden rounded-md border border-white/10 bg-[linear-gradient(145deg,_rgba(15,23,42,.8),_rgba(5,150,105,.18))] p-4 text-left transition hover:-translate-y-0.5 hover:border-emerald-300/60">
-              <div className="mb-4 flex h-20 items-center justify-center rounded-md bg-black/30 text-3xl font-black text-amber-200 group-hover:animate-pulse">{name.slice(0, 2).toUpperCase()}</div>
+              <CasinoGameLogo name={name} group={group} index={index} />
               <div className="font-black text-white">{name}</div>
               <div className="mt-1 text-xs uppercase text-emerald-300">{group}</div>
               <div className="mt-3 rounded bg-emerald-400 px-3 py-2 text-center text-xs font-black text-black">Play</div>
@@ -707,6 +723,62 @@ function Casino({ balance, soundOn, onResult }: { balance: number; soundOn: bool
       </div>
       <GameModal game={selectedGame} balance={balance} soundOn={soundOn} onClose={() => setSelectedGame(null)} onResult={onResult} />
     </section>
+  );
+}
+
+function CasinoGameLogo({ name, group, index }: { name: string; group: (typeof casinoCategories)[number]; index: number }) {
+  const exact: Record<string, string> = {
+    Crash: "↗",
+    Double: "×2",
+    Mines: "◆",
+    Plinko: "●",
+    Dice: "⚂",
+    Limbo: "∞",
+    HiLo: "A↕",
+    "Coin Flip": "$",
+    Wheel: "◉",
+    Tower: "▥",
+    "European Roulette": "37",
+    "American Roulette": "00",
+    Blackjack: "21",
+    Baccarat: "9",
+    "Texas Hold'em Poker": "♠",
+    "Video Poker": "♥",
+    "Three Card Poker": "♣",
+    "Dragon Tiger": "龍",
+    "Sic Bo": "⚄",
+    Keno: "80",
+    "Pai Gow Poker": "牌",
+    "Drop the Pin": "⌖",
+    "City Roulette": "◎",
+    "Distance Bet": "📍",
+    "Penalty Shootout": "⚽",
+    "Free Kick": "🥅",
+    "Basketball Shots": "🏀",
+    "Horse Racing": "🏁",
+    "Greyhound Racing": "◇",
+    "Quick Soccer": "⚽",
+    "F1 Sprint": "F1",
+  };
+  const slotSymbols = ["🍒", "7", "♛", "✦", "◆", "☀", "⚡", "★"];
+  const instantSymbols = ["✸", "▣", "$", "?", "✓", "★", "◇", "●"];
+  const groupSymbol =
+    exact[name] ??
+    (group === "Slots" ? slotSymbols[index % slotSymbols.length] :
+      group === "Instant Win" ? instantSymbols[index % instantSymbols.length] :
+        group === "Live" ? `C${index + 1}` :
+          name.slice(0, 2).toUpperCase());
+  const accent =
+    group === "Blaze Games" ? "from-emerald-400/30 via-black/30 to-red-500/25 text-emerald-100" :
+      group === "Slots" ? "from-amber-300/30 via-black/30 to-fuchsia-500/25 text-amber-100" :
+        group === "Table Games" ? "from-red-500/25 via-black/30 to-emerald-400/25 text-white" :
+          group === "Sports Arcade" ? "from-sky-400/25 via-black/30 to-emerald-400/25 text-sky-100" :
+            group === "Map Games" ? "from-lime-300/25 via-black/30 to-teal-500/25 text-lime-100" :
+              "from-amber-300/20 via-black/30 to-emerald-400/20 text-amber-100";
+  return (
+    <div className={clsx("mb-4 flex h-24 items-center justify-center rounded-md border border-white/10 bg-gradient-to-br text-4xl font-black shadow-inner transition group-hover:scale-[1.02]", accent)}>
+      <div className="flex h-16 w-16 items-center justify-center rounded-full border border-white/15 bg-black/35 text-center leading-none shadow-[0_0_30px_rgba(16,185,129,.18)]">{groupSymbol}</div>
+    </div>
   );
 }
 
