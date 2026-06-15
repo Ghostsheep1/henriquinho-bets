@@ -62,6 +62,7 @@ type RiskSignals = { level: string; casinoLosses: number; depositCount: number; 
 const adminEmail = "henrique@henriquinhobets.com";
 const adminPassword = "HenriqueAdmin2026!";
 const supportEmail = "hsribeiro1@gmail.com";
+const casinoHouseEdge = 0.04;
 
 const leaguePopularity: Record<string, number> = {
   "FIFA World Cup": 100,
@@ -161,6 +162,7 @@ type SportsPayload = {
   matches: Match[];
   worldCup?: Match[];
   message: string;
+  oddsSource?: "real-provider" | "calculated-demo";
 };
 
 const casinoCategories = ["All", "Blaze Games", "Slots", "Table Games", "Live", "Map Games", "Sports Arcade", "Instant Win"] as const;
@@ -190,6 +192,10 @@ function payout(stake: number, odds: number) {
   return Math.round(stake * odds);
 }
 
+function fairWin(chance: number) {
+  return Math.random() < Math.max(0.01, Math.min(0.99, chance - casinoHouseEdge));
+}
+
 function resetLedger() {
   return starterTransactions.map((transaction) => ({ ...transaction, id: uid("txn"), createdAt: new Date().toISOString() }));
 }
@@ -212,6 +218,18 @@ function isInPlayMarket(match: Match) {
   if (match.status !== "upcoming" || !Number.isFinite(startsAt)) return false;
   const timeUntilStart = startsAt - Date.now();
   return timeUntilStart >= 0 && timeUntilStart <= 24 * 60 * 60 * 1000;
+}
+
+function oddsAreFresh(match: Match) {
+  if (match.oddsSource !== "real-provider") return false;
+  const updatedAt = new Date(match.oddsUpdatedAt ?? "").getTime();
+  if (!Number.isFinite(updatedAt)) return false;
+  const maxAge = match.status === "live" ? 20 * 1000 : 2 * 60 * 1000;
+  return Date.now() - updatedAt <= maxAge;
+}
+
+function bettingPaused(match: Match) {
+  return match.status === "live" && !oddsAreFresh(match);
 }
 
 function isUpcomingMarket(match: Match) {
@@ -320,7 +338,7 @@ function useLiveSports() {
         if (!active) return;
         setMatches(freshMatches);
         setWorldCup((football.worldCup ?? []).filter(isFreshMarket));
-        setMessage(!odds.configured || !football.configured ? "Markets updating soon" : odds.message === "ok" || football.message === "ok" ? "Live events loaded" : "Markets updating soon");
+        setMessage(!odds.configured || !football.configured ? "Markets updating soon" : odds.message === "ok" || football.message === "ok" ? "Realtime odds loaded" : odds.message);
       } catch {
         if (!active) return;
         setMatches([]);
@@ -332,7 +350,7 @@ function useLiveSports() {
     };
 
     load();
-    const timer = window.setInterval(load, 60000);
+    const timer = window.setInterval(load, 10000);
     return () => {
       active = false;
       window.clearInterval(timer);
@@ -905,7 +923,9 @@ function EmptyMarkets({ message }: { message: string }) {
 
 function MatchCard({ match, addPick, slip }: { match: Match; addPick: (pick: BetPick) => void; slip: BetPick[] }) {
   const event = `${match.home} vs ${match.away}`;
-  const bettingOpen = match.status === "live" || match.status === "upcoming";
+  const paused = bettingPaused(match);
+  const realOdds = match.oddsSource === "real-provider";
+  const bettingOpen = (match.status === "live" || match.status === "upcoming") && !paused;
   const picks: BetPick[] = match.odds && bettingOpen ? [
     { id: `${match.id}-home`, matchId: match.id, label: match.home, market: "moneyline", odds: match.odds.moneyline.home, event },
     ...(match.odds.moneyline.draw ? [{ id: `${match.id}-draw`, matchId: match.id, label: "Draw", market: "moneyline" as const, odds: match.odds.moneyline.draw, event }] : []),
@@ -931,10 +951,14 @@ function MatchCard({ match, addPick, slip }: { match: Match; addPick: (pick: Bet
           <h3 className="mt-2 text-lg font-black text-white">{event}</h3>
           <p className="text-sm text-slate-400">{match.score ?? dateTime.format(new Date(match.startsAt))} {match.minute ? `- ${match.minute}` : ""}</p>
         </div>
-        <div className="rounded-md bg-emerald-400/10 px-3 py-2 text-sm font-bold text-emerald-200">{bettingOpen && match.odds ? "Calculated demo odds" : match.status === "finished" ? "Final" : "Odds updating soon"}</div>
+        <div className={clsx("rounded-md px-3 py-2 text-sm font-bold", realOdds ? "bg-emerald-400/10 text-emerald-200" : "bg-amber-300/10 text-amber-100")}>
+          {paused ? "Odds refresh locked" : bettingOpen && match.odds ? realOdds ? "Realtime odds" : "Calculated demo odds" : match.status === "finished" ? "Final" : "Odds updating soon"}
+        </div>
       </div>
-      {bettingOpen && match.odds && <div className="mt-3 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs text-amber-100">Live event feed, simulated virtual odds. Not real sportsbook pricing.</div>}
-      {picks.length === 0 && <div className="mt-4 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-3 text-sm text-amber-100">{bettingOpen ? "Odds updating soon" : "Betting closed"}</div>}
+      {realOdds && match.oddsUpdatedAt && <div className="mt-3 rounded-md border border-emerald-300/20 bg-emerald-400/10 px-3 py-2 text-xs text-emerald-100">Provider: {match.oddsProvider}. Updated {new Date(match.oddsUpdatedAt).toLocaleTimeString()}.</div>}
+      {!realOdds && match.odds && <div className="mt-3 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs text-amber-100">Demo fallback odds. Add THE_ODDS_API_KEY to show realtime sportsbook odds.</div>}
+      {paused && <div className="mt-3 rounded-md border border-red-300/20 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-100">Live betting paused until the odds provider refreshes this market.</div>}
+      {picks.length === 0 && <div className="mt-4 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-3 text-sm text-amber-100">{paused ? "Waiting for fresh live odds" : bettingOpen ? "Odds updating soon" : "Betting closed"}</div>}
       <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {picks.map((pick) => {
           const selected = slip.some((item) => item.id === pick.id);
@@ -1389,7 +1413,7 @@ function DoubleModalGame({ game, balance, settle }: { game: string; balance: num
       setTick((value) => value + 1);
       if (frames >= 18) {
         window.clearInterval(timer);
-        const landed: "Red" | "Black" = Math.random() > 0.5 ? "Red" : "Black";
+        const landed: "Red" | "Black" = fairWin(0.5) ? choice : choice === "Red" ? "Black" : "Red";
         const won = landed === choice;
         setTick(landed === "Red" ? 0 : 1);
         setSpinning(false);
@@ -1772,7 +1796,7 @@ function MapModalGame({ game, balance, settle }: { game: string; balance: number
   const cities = ["New York", "São Paulo", "Tokyo", "Paris", "Cairo", "Sydney", "Toronto"];
   const play = () => {
     const city = cities[Math.floor(Math.random() * cities.length)];
-    const win = Math.random() > 0.45;
+    const win = fairWin(0.55);
     const amount = win ? stake : -stake;
     setResult(`${game}: ${city}. ${win ? `Won +${currency.format(amount)}` : `Lost ${currency.format(stake)}`}.`);
     settle(game, amount);
@@ -1995,7 +2019,7 @@ function AdminView({ bets, transactions }: { bets: Bet[]; transactions: Transact
       <div className="rounded-md border border-white/10 bg-[#0b1210] p-4">
         <h2 className="mb-3 font-black text-white">Automation status</h2>
         <div className="grid gap-3 md:grid-cols-3">
-          {["Live event feeds", "Calculated demo odds", "Supabase realtime wallet"].map((item) => <div key={item} className="rounded-md bg-emerald-400/10 p-4 text-emerald-100"><Crown className="mb-2 h-5 w-5" />{item}<div className="mt-1 text-xs text-slate-400">Ready for production</div></div>)}
+          {["Live event feeds", "Realtime odds feed", "Supabase realtime wallet"].map((item) => <div key={item} className="rounded-md bg-emerald-400/10 p-4 text-emerald-100"><Crown className="mb-2 h-5 w-5" />{item}<div className="mt-1 text-xs text-slate-400">Ready for production</div></div>)}
         </div>
       </div>
     </section>

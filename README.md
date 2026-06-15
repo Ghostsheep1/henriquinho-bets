@@ -31,11 +31,13 @@ Replace the placeholders in `.env.local`:
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-supabase-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key-for-server-jobs-only
+THE_ODDS_API_KEY=your-the-odds-api-key
 ```
 
 Free-tier sources:
 
 - Supabase: [https://supabase.com](https://supabase.com)
+- The Odds API: [https://the-odds-api.com](https://the-odds-api.com)
 - Public scoreboards are used for local sports data and do not require an API key.
 
 ## Supabase database
@@ -52,7 +54,7 @@ The schema creates `profiles`, `transactions`, `matches`, `bets`, and `game_roun
 
 ## API routes
 
-- `GET /api/odds`: fetches public scoreboards and normalizes live/upcoming events into calculated demo moneyline, totals, and handicap markets.
+- `GET /api/odds`: uses The Odds API for realtime bookmaker odds when `THE_ODDS_API_KEY` is set, then falls back to calculated demo prices for local no-key mode.
 - `GET /api/football`: fetches featured soccer tournament scoreboards for the featured tournament panel.
 - `POST /api/settle`: placeholder settlement endpoint for a cron worker that compares open bets against final provider results.
 
