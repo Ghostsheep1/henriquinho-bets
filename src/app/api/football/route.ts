@@ -1,6 +1,15 @@
 import { NextResponse } from "next/server";
 import type { Match } from "@/lib/types";
 
+const featuredTournaments = [
+  { slug: "fifa.world", league: "FIFA World Cup", country: "World" },
+  { slug: "uefa.euro", league: "UEFA Euro", country: "Europe" },
+  { slug: "fifa.olympics", league: "Olympic Soccer", country: "World" },
+  { slug: "fifa.wwc", league: "FIFA Women's World Cup", country: "World" },
+] as const;
+
+const stalePastWindowMs = 48 * 60 * 60 * 1000;
+
 type EspnEvent = {
   id: string;
   date: string;
@@ -10,18 +19,20 @@ type EspnEvent = {
   }>;
 };
 
-function normalizeWorldCup(event: EspnEvent): Match | null {
+function normalizeTournament(event: EspnEvent, tournament: (typeof featuredTournaments)[number]): Match | null {
   const competition = event.competitions?.[0];
   const home = competition?.competitors?.find((item) => item.homeAway === "home");
   const away = competition?.competitors?.find((item) => item.homeAway === "away");
   if (!home || !away) return null;
   const status: Match["status"] = competition?.status?.type?.completed ? "finished" : competition?.status?.type?.state === "in" ? "live" : "upcoming";
+  const startsAt = new Date(event.date).getTime();
+  if (Number.isFinite(startsAt) && startsAt < Date.now() - stalePastWindowMs && status !== "live") return null;
   const hasScore = home.score !== undefined && away.score !== undefined && (status === "live" || status === "finished");
   return {
-    id: `espn-wc-${event.id}`,
+    id: `espn-${tournament.slug}-${event.id}`,
     sport: "soccer",
-    league: "FIFA World Cup",
-    country: "World",
+    league: tournament.league,
+    country: tournament.country,
     home: home.team.displayName,
     away: away.team.displayName,
     startsAt: event.date,
@@ -34,11 +45,16 @@ function normalizeWorldCup(event: EspnEvent): Match | null {
 
 export async function GET() {
   try {
-    const response = await fetch("https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard", { next: { revalidate: 60 } });
-    if (!response.ok) throw new Error("ESPN World Cup request failed");
-    const payload = (await response.json()) as { events?: EspnEvent[] };
-    const worldCup = (payload.events ?? []).map(normalizeWorldCup).filter(Boolean) as Match[];
-    return NextResponse.json({ source: "espn-public", configured: true, worldCup, matches: worldCup, message: "ok" });
+    const results = await Promise.all(
+      featuredTournaments.map(async (tournament) => {
+        const response = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${tournament.slug}/scoreboard`, { next: { revalidate: 60 } });
+        if (!response.ok) return [];
+        const payload = (await response.json()) as { events?: EspnEvent[] };
+        return (payload.events ?? []).map((event) => normalizeTournament(event, tournament)).filter(Boolean) as Match[];
+      }),
+    );
+    const tournaments = results.flat().sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
+    return NextResponse.json({ source: "espn-public", configured: true, worldCup: tournaments, matches: tournaments, message: "ok" });
   } catch {
     return NextResponse.json({ source: "espn-public", configured: true, matches: [], worldCup: [], message: "Scores updating soon" });
   }
