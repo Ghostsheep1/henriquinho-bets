@@ -56,7 +56,8 @@ const nav = [
 ];
 
 type AppUser = { name: string; email: string; guest?: boolean; admin?: boolean };
-type Language = "en" | "pt" | "es";
+type LockedAccount = { email: string; name: string; lockedAt: string; reason: string };
+type Language = "en" | "es" | "pt" | "fr" | "de" | "it" | "zh" | "ja" | "ko" | "ar" | "hi";
 type RiskSignals = { level: string; casinoLosses: number; depositCount: number; recentLossVolume: number };
 
 const adminEmail = "henrique@henriquinhobets.com";
@@ -95,7 +96,19 @@ const leaguePopularity: Record<string, number> = {
   "UFC/MMA": 50,
 };
 
-const languageLabels: Record<Language, string> = { en: "English", pt: "Português", es: "Español" };
+const languageLabels: Record<Language, string> = {
+  en: "English",
+  es: "Español",
+  pt: "Português",
+  fr: "Français",
+  de: "Deutsch",
+  it: "Italiano",
+  zh: "中文",
+  ja: "日本語",
+  ko: "한국어",
+  ar: "العربية",
+  hi: "हिन्दी",
+};
 
 const copy: Record<Language, Record<string, string>> = {
   en: {
@@ -158,10 +171,178 @@ const copy: Record<Language, Record<string, string>> = {
     "common.deposit": "Depositar",
     "market.empty": "Los mercados aparecen cuando marcadores oficiales devuelven eventos programados o en vivo.",
   },
+  fr: {
+    "nav.sports": "Paris sportifs",
+    "nav.live": "En direct",
+    "nav.casino": "Casino",
+    "nav.wallet": "Portefeuille",
+    "nav.profile": "Profil",
+    "nav.admin": "Admin",
+    "login.title": "Entrer sur HenriquinhoBets",
+    "login.subtitle": "Connectez-vous, créez un profil beta ou entrez comme invité pour tester les marchés, le portefeuille et le casino.",
+    "login.submit": "Connexion / Créer un compte beta",
+    "login.guest": "Entrer comme invité",
+    "login.password": "Mot de passe",
+    "hero.badge": "cotes en direct, casino, marchés premium",
+    "hero.copy": "Paris sportifs, jeux de casino, marchés live, portefeuille, classement et analyses dans une interface sombre et soignée.",
+    "hero.odds": "Voir les cotes",
+    "hero.casino": "Jouer au casino",
+    "common.balance": "Solde",
+    "common.deposit": "Déposer",
+    "market.empty": "Les marchés apparaissent dès que les flux officiels renvoient des événements programmés ou en direct.",
+  },
+  de: {
+    "nav.sports": "Sportwetten",
+    "nav.live": "Live",
+    "nav.casino": "Casino",
+    "nav.wallet": "Wallet",
+    "nav.profile": "Profil",
+    "nav.admin": "Admin",
+    "login.title": "HenriquinhoBets betreten",
+    "login.subtitle": "Einloggen, Beta-Profil erstellen oder als Gast Märkte, Wallet und Casino testen.",
+    "login.submit": "Einloggen / Beta-Konto erstellen",
+    "login.guest": "Als Gast starten",
+    "login.password": "Passwort",
+    "hero.badge": "Live-Quoten, Casino, Premium-Märkte",
+    "hero.copy": "Sportwetten, Casino-Spiele, Live-Märkte, Wallet, Rangliste und Kontoanalyse in einer polierten dunklen Oberfläche.",
+    "hero.odds": "Quoten ansehen",
+    "hero.casino": "Casino spielen",
+    "common.balance": "Guthaben",
+    "common.deposit": "Einzahlen",
+    "market.empty": "Märkte erscheinen, sobald offizielle Feeds geplante oder Live-Events liefern.",
+  },
+  it: {
+    "nav.sports": "Scommesse",
+    "nav.live": "Live",
+    "nav.casino": "Casinò",
+    "nav.wallet": "Portafoglio",
+    "nav.profile": "Profilo",
+    "nav.admin": "Admin",
+    "login.title": "Entra in HenriquinhoBets",
+    "login.subtitle": "Accedi, crea un profilo beta o entra come ospite per testare mercati, portafoglio e casinò.",
+    "login.submit": "Accedi / Crea account beta",
+    "login.guest": "Entra come ospite",
+    "login.password": "Password",
+    "hero.badge": "quote live, casinò, mercati premium",
+    "hero.copy": "Scommesse sportive, giochi da casinò, mercati live, portafoglio, classifica e analisi in una piattaforma scura e curata.",
+    "hero.odds": "Vedi quote",
+    "hero.casino": "Gioca al casinò",
+    "common.balance": "Saldo",
+    "common.deposit": "Deposita",
+    "market.empty": "I mercati appaiono appena i feed ufficiali restituiscono eventi programmati o live.",
+  },
+  zh: {
+    "nav.sports": "体育投注",
+    "nav.live": "滚球",
+    "nav.casino": "赌场",
+    "nav.wallet": "钱包",
+    "nav.profile": "资料",
+    "nav.admin": "管理",
+    "login.title": "进入 HenriquinhoBets",
+    "login.subtitle": "登录、创建 beta 账号，或以访客身份测试赛事、钱包和赌场大厅。",
+    "login.submit": "登录 / 创建 beta 账号",
+    "login.guest": "访客进入",
+    "login.password": "密码",
+    "hero.badge": "实时赔率、赌场游戏、高级市场",
+    "hero.copy": "体育投注、赌场游戏、实时市场、钱包、排行榜和账户分析，集中在精致的深色界面中。",
+    "hero.odds": "浏览赔率",
+    "hero.casino": "玩赌场",
+    "common.balance": "余额",
+    "common.deposit": "充值",
+    "market.empty": "官方数据源返回赛程或直播赛事后，市场会显示在这里。",
+  },
+  ja: {
+    "nav.sports": "スポーツブック",
+    "nav.live": "ライブ",
+    "nav.casino": "カジノ",
+    "nav.wallet": "ウォレット",
+    "nav.profile": "プロフィール",
+    "nav.admin": "管理",
+    "login.title": "HenriquinhoBets に入る",
+    "login.subtitle": "ログイン、ベータアカウント作成、またはゲストで市場、ウォレット、カジノをテストできます。",
+    "login.submit": "ログイン / ベータ作成",
+    "login.guest": "ゲストで参加",
+    "login.password": "パスワード",
+    "hero.badge": "ライブオッズ、カジノ、プレミアム市場",
+    "hero.copy": "スポーツベット、カジノ、ライブ市場、ウォレット、ランキング、分析を洗練されたダークUIで提供します。",
+    "hero.odds": "オッズを見る",
+    "hero.casino": "カジノで遊ぶ",
+    "common.balance": "残高",
+    "common.deposit": "入金",
+    "market.empty": "公式フィードが予定またはライブイベントを返すと、ここに市場が表示されます。",
+  },
+  ko: {
+    "nav.sports": "스포츠북",
+    "nav.live": "라이브",
+    "nav.casino": "카지노",
+    "nav.wallet": "지갑",
+    "nav.profile": "프로필",
+    "nav.admin": "관리자",
+    "login.title": "HenriquinhoBets 입장",
+    "login.subtitle": "로그인, 베타 계정 생성 또는 게스트로 시장, 지갑, 카지노를 테스트하세요.",
+    "login.submit": "로그인 / 베타 계정 생성",
+    "login.guest": "게스트로 입장",
+    "login.password": "비밀번호",
+    "hero.badge": "실시간 배당, 카지노, 프리미엄 마켓",
+    "hero.copy": "스포츠 베팅, 카지노 게임, 라이브 마켓, 지갑, 리더보드와 계정 분석을 세련된 다크 UI에서 제공합니다.",
+    "hero.odds": "배당 보기",
+    "hero.casino": "카지노 플레이",
+    "common.balance": "잔액",
+    "common.deposit": "입금",
+    "market.empty": "공식 피드가 예정 또는 라이브 이벤트를 반환하면 여기에 마켓이 표시됩니다.",
+  },
+  ar: {
+    "nav.sports": "المراهنات الرياضية",
+    "nav.live": "مباشر",
+    "nav.casino": "كازينو",
+    "nav.wallet": "المحفظة",
+    "nav.profile": "الملف",
+    "nav.admin": "الإدارة",
+    "login.title": "ادخل HenriquinhoBets",
+    "login.subtitle": "سجل الدخول أو أنشئ حساب بيتا أو ادخل كضيف لاختبار الأسواق والمحفظة والكازينو.",
+    "login.submit": "دخول / إنشاء حساب بيتا",
+    "login.guest": "دخول كضيف",
+    "login.password": "كلمة المرور",
+    "hero.badge": "احتمالات مباشرة، كازينو، أسواق مميزة",
+    "hero.copy": "مراهنات رياضية وألعاب كازينو وأسواق مباشرة ومحفظة وترتيب وتحليلات في واجهة داكنة مصقولة.",
+    "hero.odds": "تصفح الاحتمالات",
+    "hero.casino": "العب الكازينو",
+    "common.balance": "الرصيد",
+    "common.deposit": "إيداع",
+    "market.empty": "تظهر الأسواق هنا عندما تعود المصادر الرسمية بالأحداث المجدولة أو المباشرة.",
+  },
+  hi: {
+    "nav.sports": "स्पोर्ट्सबुक",
+    "nav.live": "लाइव",
+    "nav.casino": "कैसीनो",
+    "nav.wallet": "वॉलेट",
+    "nav.profile": "प्रोफाइल",
+    "nav.admin": "एडमिन",
+    "login.title": "HenriquinhoBets में प्रवेश करें",
+    "login.subtitle": "लॉगिन करें, beta प्रोफाइल बनाएं, या गेस्ट बनकर मार्केट, वॉलेट और कैसीनो टेस्ट करें।",
+    "login.submit": "लॉगिन / beta खाता बनाएं",
+    "login.guest": "गेस्ट के रूप में आएं",
+    "login.password": "पासवर्ड",
+    "hero.badge": "लाइव odds, कैसीनो गेम्स, प्रीमियम मार्केट",
+    "hero.copy": "स्पोर्ट्स बेटिंग, कैसीनो गेम्स, लाइव मार्केट, वॉलेट, लीडरबोर्ड और अकाउंट एनालिटिक्स एक polished dark interface में।",
+    "hero.odds": "odds देखें",
+    "hero.casino": "कैसीनो खेलें",
+    "common.balance": "बैलेंस",
+    "common.deposit": "डिपॉजिट",
+    "market.empty": "जब official feeds scheduled या live events लौटाते हैं, markets यहां दिखाई देंगे।",
+  },
 };
 
 function t(language: Language, key: string) {
   return copy[language][key] ?? copy.en[key] ?? key;
+}
+
+function isLanguage(value: unknown): value is Language {
+  return typeof value === "string" && value in languageLabels;
+}
+
+function lockedAccountKey(user: AppUser | null) {
+  return (user?.email || "guest@henriquinhobets.local").toLowerCase();
 }
 
 type SportsPayload = {
@@ -429,6 +610,7 @@ export default function HenriquinhoApp() {
   const [user, setUser] = useState<AppUser | null>(null);
   const [hasEntered, setHasEntered] = useState(false);
   const [accessLocked, setAccessLocked] = useState(false);
+  const [lockedAccounts, setLockedAccounts] = useState<LockedAccount[]>([]);
   const [hydrated, setHydrated] = useState(false);
   const [language, setLanguage] = useState<Language>("en");
   const [balance, setBalance] = useState(1000);
@@ -443,7 +625,9 @@ export default function HenriquinhoApp() {
   const matchById = useMemo(() => new Map(matches.map((match) => [match.id, match])), [matches]);
 
   useEffect(() => {
-    setAccessLocked(localStorage.getItem("henriquinho-access-lock") === "true");
+    const rawLockedAccounts = localStorage.getItem("henriquinho-locked-accounts");
+    const parsedLockedAccounts = rawLockedAccounts ? JSON.parse(rawLockedAccounts) as LockedAccount[] : [];
+    setLockedAccounts(parsedLockedAccounts);
     const raw = localStorage.getItem("henriquinho-state-v2");
     if (raw) {
       const parsed = JSON.parse(raw) as {
@@ -457,7 +641,16 @@ export default function HenriquinhoApp() {
       };
       setUser(parsed.user);
       setHasEntered(Boolean(parsed.hasEntered && parsed.user));
-      if (parsed.language) setLanguage(parsed.language);
+      const currentLockKey = localStorage.getItem("henriquinho-access-lock");
+      const savedUserKey = lockedAccountKey(parsed.user);
+      const savedUserIsAdmin = Boolean(parsed.user?.admin);
+      if (currentLockKey === "true") localStorage.removeItem("henriquinho-access-lock");
+      const savedUserLocked = parsed.user
+        ? currentLockKey === savedUserKey || parsedLockedAccounts.some((account) => account.email === savedUserKey)
+        : Boolean(currentLockKey && currentLockKey !== "true");
+      setAccessLocked(Boolean(savedUserLocked && !savedUserIsAdmin));
+      if (savedUserIsAdmin && currentLockKey) localStorage.removeItem("henriquinho-access-lock");
+      if (isLanguage(parsed.language)) setLanguage(parsed.language);
       setBalance(parsed.balance);
       setTransactions((parsed.transactions ?? starterTransactions).map((transaction) => ({
         ...transaction,
@@ -465,6 +658,10 @@ export default function HenriquinhoApp() {
       })));
       setBets(parsed.bets ?? []);
       setLastBonus(parsed.lastBonus);
+    } else {
+      const orphanLock = localStorage.getItem("henriquinho-access-lock");
+      if (orphanLock === "true") localStorage.removeItem("henriquinho-access-lock");
+      setAccessLocked(Boolean(orphanLock && orphanLock !== "true"));
     }
     setHydrated(true);
   }, []);
@@ -473,6 +670,11 @@ export default function HenriquinhoApp() {
     if (!hydrated) return;
     localStorage.setItem("henriquinho-state-v2", JSON.stringify({ user, balance, transactions, bets, lastBonus, hasEntered, language }));
   }, [user, balance, transactions, bets, lastBonus, hasEntered, language, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    localStorage.setItem("henriquinho-locked-accounts", JSON.stringify(lockedAccounts));
+  }, [hydrated, lockedAccounts]);
 
   const isAdmin = Boolean(user?.admin);
 
@@ -565,7 +767,18 @@ export default function HenriquinhoApp() {
   };
 
   const lockAccess = () => {
-    localStorage.setItem("henriquinho-access-lock", "true");
+    if (user?.admin) return;
+    const email = lockedAccountKey(user);
+    setLockedAccounts((items) => {
+      const nextLock: LockedAccount = {
+        email,
+        name: user?.name ?? "Guest Player",
+        lockedAt: new Date().toISOString(),
+        reason: "Self-exclusion request",
+      };
+      return [nextLock, ...items.filter((item) => item.email !== email)];
+    });
+    localStorage.setItem("henriquinho-access-lock", email);
     setAccessLocked(true);
     setUser(null);
     setHasEntered(false);
@@ -574,6 +787,16 @@ export default function HenriquinhoApp() {
   };
 
   const enterBeta = (profile: AppUser) => {
+    const email = lockedAccountKey(profile);
+    if (!profile.admin && lockedAccounts.some((account) => account.email === email)) {
+      localStorage.setItem("henriquinho-access-lock", email);
+      setAccessLocked(true);
+      return;
+    }
+    if (profile.admin) {
+      localStorage.removeItem("henriquinho-access-lock");
+      setAccessLocked(false);
+    }
     setUser(profile);
     setBalance(1000);
     setTransactions(resetLedger());
@@ -582,6 +805,22 @@ export default function HenriquinhoApp() {
     setLastBonus(null);
     setActive("sports");
     setHasEntered(true);
+  };
+
+  const adminUnlockDevice = (profile: AppUser) => {
+    localStorage.removeItem("henriquinho-access-lock");
+    setAccessLocked(false);
+    setLockedAccounts((items) => items.filter((item) => item.email !== lockedAccountKey(profile)));
+    enterBeta(profile);
+  };
+
+  const unlockAccount = (email: string) => {
+    const normalized = email.toLowerCase();
+    setLockedAccounts((items) => items.filter((item) => item.email !== normalized));
+    if (localStorage.getItem("henriquinho-access-lock") === normalized || lockedAccountKey(user) === normalized) {
+      localStorage.removeItem("henriquinho-access-lock");
+      setAccessLocked(false);
+    }
   };
 
   const winCount = bets.filter((bet) => bet.status === "won").length;
@@ -603,7 +842,7 @@ export default function HenriquinhoApp() {
   }
 
   if (accessLocked) {
-    return <LockedScreen />;
+    return <LockedScreen onAdminUnlock={adminUnlockDevice} />;
   }
 
   if (!hasEntered) {
@@ -624,7 +863,7 @@ export default function HenriquinhoApp() {
           {active === "casino" && <Casino balance={balance} soundOn={soundOn} onResult={casinoResult} />}
           {active === "wallet" && <WalletView user={user} balance={balance} claimBonus={claimBonus} transactions={transactions} onDeposit={() => setDepositOpen(true)} onLock={lockAccess} riskSignals={riskSignals} />}
           {active === "profile" && <ProfileView user={user} setUser={setUser} balance={balance} bets={bets} winCount={winCount} lossCount={lossCount} onLock={lockAccess} riskSignals={riskSignals} settleBet={settleBet} cashOutBet={cashOutBet} cashOutValue={(bet) => cashOutOffer(bet, matchById)} />}
-          {active === "admin" && isAdmin && <AdminView bets={bets} transactions={transactions} />}
+          {active === "admin" && isAdmin && <AdminView bets={bets} transactions={transactions} lockedAccounts={lockedAccounts} unlockAccount={unlockAccount} />}
         </main>
         <aside className="hidden w-80 shrink-0 space-y-4 xl:block">
           <BetSlip slip={slip} setSlip={setSlip} stake={stake} setStake={setStake} balance={balance} placeBet={placeBet} combinedOdds={combinedOdds} potentialWin={potentialWin} />
@@ -713,7 +952,7 @@ function LoginGate({ language, setLanguage, onEnter }: { language: Language; set
           </label>
           <label className="mt-3 flex items-start gap-3 rounded-md border border-white/10 bg-black/25 p-3 text-sm text-slate-200">
             <input checked={termsConfirmed} onChange={(event) => { setTermsConfirmed(event.target.checked); setAgeError(""); }} type="checkbox" className="mt-1 h-4 w-4 accent-emerald-400" />
-            <span>I accept the beta terms: sports events come from live public feeds, but displayed odds are calculated demo prices for virtual play and are not real bookmaker lines.</span>
+            <span>I accept the beta terms: sports events come from live feeds, sportsbook prices require a configured odds provider, and all balances are virtual coins only.</span>
           </label>
           {ageError && <div className="mt-2 rounded-md bg-red-500/15 px-3 py-2 text-xs font-bold text-red-200">{ageError}</div>}
           <button type="button" onClick={enterWithCredentials} className="mt-5 w-full rounded-md bg-emerald-400 py-3 font-black text-black disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400" disabled={!ageConfirmed || !termsConfirmed}>{t(language, "login.submit")}</button>
@@ -725,7 +964,18 @@ function LoginGate({ language, setLanguage, onEnter }: { language: Language; set
   );
 }
 
-function LockedScreen() {
+function LockedScreen({ onAdminUnlock }: { onAdminUnlock: (profile: AppUser) => void }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const unlock = (event: FormEvent) => {
+    event.preventDefault();
+    if (email.trim().toLowerCase() !== adminEmail || password !== adminPassword) {
+      setError("Admin credentials required to unlock this beta device.");
+      return;
+    }
+    onAdminUnlock({ name: "Henrique Admin", email: adminEmail, admin: true });
+  };
   return (
     <main className="flex min-h-screen items-center justify-center bg-[#070a0c] px-4 text-slate-100">
       <section className="max-w-xl rounded-md border border-red-300/20 bg-[#0b1210] p-6 text-center shadow-2xl">
@@ -740,6 +990,14 @@ function LockedScreen() {
         <div className="mt-4 rounded-md bg-white/[0.04] p-4 text-left text-sm text-slate-300">
           If gambling ever stops feeling fun, pause immediately and talk to someone you trust. Virtual coins only, no real-money wagering.
         </div>
+        <form onSubmit={unlock} className="mt-5 rounded-md border border-white/10 bg-black/25 p-4 text-left">
+          <div className="text-sm font-black text-white">Admin recovery</div>
+          <p className="mt-1 text-xs text-slate-400">Admin accounts cannot be self-excluded. Use your admin login to clear a mistaken beta lock.</p>
+          <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Admin email" className="mt-3 w-full rounded-md border border-white/10 bg-black/30 px-3 py-3 text-sm text-white" />
+          <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" placeholder="Admin password" className="mt-2 w-full rounded-md border border-white/10 bg-black/30 px-3 py-3 text-sm text-white" />
+          {error && <div className="mt-2 rounded bg-red-500/15 px-3 py-2 text-xs font-bold text-red-200">{error}</div>}
+          <button className="mt-3 w-full rounded-md bg-emerald-400 py-3 font-black text-black">Unlock as admin</button>
+        </form>
       </section>
     </main>
   );
@@ -2091,7 +2349,7 @@ function WalletView({ user, balance, claimBonus, transactions, onDeposit, onLock
           <button onClick={onDeposit} className="mt-5 w-full rounded-md bg-emerald-400 py-3 font-black text-black">Deposit</button>
           <button onClick={claimBonus} className="mt-2 w-full rounded-md border border-white/10 bg-black/25 py-3 font-black text-white">Claim daily bonus</button>
         </div>
-        <ResponsibleGamingPanel onLock={onLock} riskSignals={riskSignals} />
+        <ResponsibleGamingPanel user={user} onLock={onLock} riskSignals={riskSignals} />
       </div>
       <TransactionList transactions={transactions} />
       <Leaderboard user={user} balance={balance} />
@@ -2184,7 +2442,8 @@ function ProfileView({ user, setUser, balance, bets, winCount, lossCount, onLock
   const winRate = decidedBets ? `${Math.round((winCount / decidedBets) * 100)}%` : "0%";
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    setUser({ name: name || "Henrique", email: email || "player@henriquinhobets.local" });
+    const normalizedEmail = (email || user?.email || "player@henriquinhobets.local").trim().toLowerCase();
+    setUser({ name: name || "Henrique", email: normalizedEmail, admin: user?.admin, guest: user?.guest });
   };
   return (
     <section className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)_340px]">
@@ -2197,7 +2456,7 @@ function ProfileView({ user, setUser, balance, bets, winCount, lossCount, onLock
           <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email" className="mt-2 w-full rounded-md border border-white/10 bg-black/30 px-3 py-3" />
           <button className="mt-3 w-full rounded-md bg-emerald-400 py-3 font-black text-black">Register / login</button>
         </form>
-        <ResponsibleGamingPanel onLock={onLock} riskSignals={riskSignals} />
+        <ResponsibleGamingPanel user={user} onLock={onLock} riskSignals={riskSignals} />
       </div>
       <div className="grid gap-4 sm:grid-cols-4">
         <Stat label="Balance" value={currency.format(balance)} />
@@ -2217,7 +2476,7 @@ function ProfileView({ user, setUser, balance, bets, winCount, lossCount, onLock
   );
 }
 
-function AdminView({ bets, transactions }: { bets: Bet[]; transactions: Transaction[] }) {
+function AdminView({ bets, transactions, lockedAccounts, unlockAccount }: { bets: Bet[]; transactions: Transaction[]; lockedAccounts: LockedAccount[]; unlockAccount: (email: string) => void }) {
   const totalVolume = transactions.reduce((sum, item) => sum + Math.abs(item.amount), 0);
   const gameCounts = transactions
     .filter((item) => item.type === "casino_win" || item.type === "casino_loss")
@@ -2237,6 +2496,25 @@ function AdminView({ bets, transactions }: { bets: Bet[]; transactions: Transact
           {["Live event feeds", "Realtime odds feed", "Supabase realtime wallet"].map((item) => <div key={item} className="rounded-md bg-emerald-400/10 p-4 text-emerald-100"><Crown className="mb-2 h-5 w-5" />{item}<div className="mt-1 text-xs text-slate-400">Ready for production</div></div>)}
         </div>
       </div>
+      <div className="rounded-md border border-white/10 bg-[#0b1210] p-4">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="font-black text-white">Locked accounts</h2>
+          <span className="rounded bg-red-500/10 px-2 py-1 text-xs font-bold text-red-100">{lockedAccounts.length} locked</span>
+        </div>
+        <div className="space-y-2">
+          {lockedAccounts.length === 0 && <div className="rounded-md bg-white/[0.04] p-3 text-sm text-slate-400">No locked beta accounts right now.</div>}
+          {lockedAccounts.map((account) => (
+            <div key={`${account.email}-${account.lockedAt}`} className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-white/[0.04] px-3 py-3 text-sm">
+              <div>
+                <div className="font-black text-white">{account.name}</div>
+                <div className="text-xs text-slate-400">{account.email} - {new Date(account.lockedAt).toLocaleString()}</div>
+                <div className="text-xs text-amber-200">{account.reason}</div>
+              </div>
+              <button onClick={() => unlockAccount(account.email)} className="rounded-md bg-emerald-400 px-3 py-2 text-xs font-black text-black">Unlock</button>
+            </div>
+          ))}
+        </div>
+      </div>
     </section>
   );
 }
@@ -2245,8 +2523,23 @@ function Stat({ label, value }: { label: string; value: string }) {
   return <div className="rounded-md border border-white/10 bg-[#0b1210] p-4"><div className="text-xs uppercase text-slate-400">{label}</div><div className="mt-1 text-2xl font-black text-white">{value}</div></div>;
 }
 
-function ResponsibleGamingPanel({ onLock, riskSignals }: { onLock: () => void; riskSignals: RiskSignals }) {
+function ResponsibleGamingPanel({ user, onLock, riskSignals }: { user: AppUser | null; onLock: () => void; riskSignals: RiskSignals }) {
+  const [confirmStep, setConfirmStep] = useState(0);
   const elevated = riskSignals.level === "Elevated";
+  const adminProtected = Boolean(user?.admin);
+  const lockCopy = confirmStep === 0
+    ? "Lock my access"
+    : confirmStep === 1
+      ? "Warning 1: continue to final confirmation"
+      : "Warning 2: lock this account/device now";
+  const requestLock = () => {
+    if (adminProtected) return;
+    if (confirmStep < 2) {
+      setConfirmStep((step) => step + 1);
+      return;
+    }
+    onLock();
+  };
   return (
     <div className={clsx("rounded-md border p-4", elevated ? "border-amber-300/30 bg-amber-300/10" : "border-white/10 bg-[#0b1210]")}>
       <div className="flex items-center justify-between gap-3">
@@ -2262,9 +2555,30 @@ function ResponsibleGamingPanel({ onLock, riskSignals }: { onLock: () => void; r
         <div>Loss volume: {currency.format(riskSignals.recentLossVolume)}</div>
       </div>
       <div className="mt-3 rounded-md bg-white/[0.04] p-3 text-xs text-slate-300">
-        Resources: take a break, set limits, talk to someone you trust, or use self-exclusion. Virtual coins only.
+        <div className="font-black text-white">Support resources</div>
+        <div className="mt-2 grid gap-1">
+          <span>Take a 24-hour break before continuing.</span>
+          <span>Tell someone you trust and ask them to sit with you.</span>
+          <span>Use device/app blockers if you need distance.</span>
+          <span>US: call or text 988 for crisis support.</span>
+          <span>US gambling help: 1-800-GAMBLER.</span>
+          <span>Brazil CVV: 188. Portugal SNS 24: 808 24 24 24.</span>
+          <span>Virtual coins only; never chase losses.</span>
+        </div>
       </div>
-      <button onClick={onLock} className="mt-3 w-full rounded-md bg-red-500 px-3 py-3 font-black text-white">Lock my access</button>
+      {confirmStep > 0 && !adminProtected && (
+        <div className="mt-3 rounded-md border border-red-300/20 bg-red-500/10 p-3 text-xs text-red-100">
+          This is a self-exclusion lock. You will be signed out and blocked on this device until admin unlocks it or you email {supportEmail}.
+        </div>
+      )}
+      {adminProtected ? (
+        <div className="mt-3 rounded-md border border-emerald-300/20 bg-emerald-400/10 px-3 py-3 text-sm font-bold text-emerald-100">Admin accounts are protected and cannot be self-locked.</div>
+      ) : (
+        <div className="mt-3 grid gap-2">
+          <button onClick={requestLock} className={clsx("w-full rounded-md px-3 py-3 font-black text-white", confirmStep < 2 ? "bg-amber-600" : "bg-red-500")}>{lockCopy}</button>
+          {confirmStep > 0 && <button onClick={() => setConfirmStep(0)} className="w-full rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm font-bold text-slate-200">Cancel lock request</button>}
+        </div>
+      )}
       <p className="mt-2 text-xs text-slate-500">Locked accounts/devices must email {supportEmail} to request access again.</p>
     </div>
   );
