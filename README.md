@@ -8,7 +8,7 @@ HenriquinhoBets is a sportsbook and casino interface built with Next.js 14 App R
 - Sportsbook that only renders live/upcoming events returned by public scoreboards.
 - Featured FIFA World Cup, Euro, Olympic, and Women's World Cup sections from public soccer data.
 - Real API empty states: if scoreboards are temporarily unavailable, the UI shows “Odds updating soon” instead of invented matches.
-- Moneyline, totals, handicap, multi-pick parlays, and settlement hook.
+- Calculated demo moneyline, totals, handicap, multi-pick parlays, and settlement hook. These are virtual prices, not real sportsbook lines.
 - Casino section with flagship playable games plus a 100+ game categorized lobby.
 - Deposit modal with amount presets, payment method badges, 2-second processing state, confirmation, and wallet ledger entry.
 - Wallet history, daily bonus, leaderboard, profile stats, bet history, live ticker, mobile sidebar, footer links, and admin metrics shell.
@@ -52,7 +52,7 @@ The schema creates `profiles`, `transactions`, `matches`, `bets`, and `game_roun
 
 ## API routes
 
-- `GET /api/odds`: fetches public scoreboards and normalizes live/upcoming events into moneyline, totals, and handicap markets.
+- `GET /api/odds`: fetches public scoreboards and normalizes live/upcoming events into calculated demo moneyline, totals, and handicap markets.
 - `GET /api/football`: fetches featured soccer tournament scoreboards for the featured tournament panel.
 - `POST /api/settle`: placeholder settlement endpoint for a cron worker that compares open bets against final provider results.
 

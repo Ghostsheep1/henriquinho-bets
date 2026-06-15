@@ -320,12 +320,12 @@ function useLiveSports() {
         if (!active) return;
         setMatches(freshMatches);
         setWorldCup((football.worldCup ?? []).filter(isFreshMarket));
-        setMessage(!odds.configured || !football.configured ? "Odds updating soon" : odds.message === "ok" || football.message === "ok" ? "Live markets loaded" : "Odds updating soon");
+        setMessage(!odds.configured || !football.configured ? "Markets updating soon" : odds.message === "ok" || football.message === "ok" ? "Live events loaded" : "Markets updating soon");
       } catch {
         if (!active) return;
         setMatches([]);
         setWorldCup([]);
-        setMessage("Odds updating soon");
+        setMessage("Markets updating soon");
       } finally {
         if (active) setLoading(false);
       }
@@ -551,10 +551,11 @@ function LoginGate({ language, setLanguage, onEnter }: { language: Language; set
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [ageConfirmed, setAgeConfirmed] = useState(false);
+  const [termsConfirmed, setTermsConfirmed] = useState(false);
   const [ageError, setAgeError] = useState("");
   const enterWithCredentials = () => {
-    if (!ageConfirmed) {
-      setAgeError("You must confirm you are 18+ to enter.");
+    if (!ageConfirmed || !termsConfirmed) {
+      setAgeError("You must confirm 18+ and accept the beta terms to enter.");
       return;
     }
     const normalizedEmail = email.trim().toLowerCase();
@@ -566,8 +567,8 @@ function LoginGate({ language, setLanguage, onEnter }: { language: Language; set
     });
   };
   const enterAsGuest = () => {
-    if (!ageConfirmed) {
-      setAgeError("You must confirm you are 18+ to enter.");
+    if (!ageConfirmed || !termsConfirmed) {
+      setAgeError("You must confirm 18+ and accept the beta terms to enter.");
       return;
     }
     onEnter({ name: "Guest Player", email: "guest@henriquinhobets.local", guest: true });
@@ -587,7 +588,7 @@ function LoginGate({ language, setLanguage, onEnter }: { language: Language; set
           <h1 className="text-4xl font-black text-white sm:text-7xl">Henriquinho<span className="text-amber-300">Bets</span></h1>
           <p className="mt-4 max-w-2xl text-base text-slate-300 sm:text-lg">{t(language, "login.subtitle")}</p>
           <div className="mt-6 grid max-w-2xl gap-3 sm:grid-cols-3">
-            {["$1,000 starter balance", "Live and upcoming odds", "110 casino games"].map((item) => (
+            {["$1,000 starter balance", "Live event feeds", "110 casino games"].map((item) => (
               <div key={item} className="rounded-md border border-white/10 bg-white/[0.04] p-4 text-sm font-bold text-emerald-100">{item}</div>
             ))}
           </div>
@@ -615,9 +616,13 @@ function LoginGate({ language, setLanguage, onEnter }: { language: Language; set
             <input checked={ageConfirmed} onChange={(event) => { setAgeConfirmed(event.target.checked); setAgeError(""); }} type="checkbox" className="mt-1 h-4 w-4 accent-emerald-400" />
             <span>I confirm I am 18+ and understand this beta uses virtual coins only.</span>
           </label>
+          <label className="mt-3 flex items-start gap-3 rounded-md border border-white/10 bg-black/25 p-3 text-sm text-slate-200">
+            <input checked={termsConfirmed} onChange={(event) => { setTermsConfirmed(event.target.checked); setAgeError(""); }} type="checkbox" className="mt-1 h-4 w-4 accent-emerald-400" />
+            <span>I accept the beta terms: sports events come from live public feeds, but displayed odds are calculated demo prices for virtual play and are not real bookmaker lines.</span>
+          </label>
           {ageError && <div className="mt-2 rounded-md bg-red-500/15 px-3 py-2 text-xs font-bold text-red-200">{ageError}</div>}
-          <button type="button" onClick={enterWithCredentials} className="mt-5 w-full rounded-md bg-emerald-400 py-3 font-black text-black disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400" disabled={!ageConfirmed}>{t(language, "login.submit")}</button>
-          <button type="button" onClick={enterAsGuest} className="mt-3 w-full rounded-md border border-amber-200/40 bg-amber-300/10 py-3 font-black text-amber-100 disabled:cursor-not-allowed disabled:opacity-45" disabled={!ageConfirmed}>{t(language, "login.guest")}</button>
+          <button type="button" onClick={enterWithCredentials} className="mt-5 w-full rounded-md bg-emerald-400 py-3 font-black text-black disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400" disabled={!ageConfirmed || !termsConfirmed}>{t(language, "login.submit")}</button>
+          <button type="button" onClick={enterAsGuest} className="mt-3 w-full rounded-md border border-amber-200/40 bg-amber-300/10 py-3 font-black text-amber-100 disabled:cursor-not-allowed disabled:opacity-45" disabled={!ageConfirmed || !termsConfirmed}>{t(language, "login.guest")}</button>
           <div className="mt-4 rounded-md bg-black/25 px-3 py-3 text-xs text-slate-400">Guest mode is for beta testing only. Hosted Supabase accounts can be connected after launch.</div>
         </form>
       </section>
@@ -926,8 +931,9 @@ function MatchCard({ match, addPick, slip }: { match: Match; addPick: (pick: Bet
           <h3 className="mt-2 text-lg font-black text-white">{event}</h3>
           <p className="text-sm text-slate-400">{match.score ?? dateTime.format(new Date(match.startsAt))} {match.minute ? `- ${match.minute}` : ""}</p>
         </div>
-        <div className="rounded-md bg-emerald-400/10 px-3 py-2 text-sm font-bold text-emerald-200">{bettingOpen && match.odds ? "Realtime odds" : match.status === "finished" ? "Final" : "Odds updating soon"}</div>
+        <div className="rounded-md bg-emerald-400/10 px-3 py-2 text-sm font-bold text-emerald-200">{bettingOpen && match.odds ? "Calculated demo odds" : match.status === "finished" ? "Final" : "Odds updating soon"}</div>
       </div>
+      {bettingOpen && match.odds && <div className="mt-3 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs text-amber-100">Live event feed, simulated virtual odds. Not real sportsbook pricing.</div>}
       {picks.length === 0 && <div className="mt-4 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-3 text-sm text-amber-100">{bettingOpen ? "Odds updating soon" : "Betting closed"}</div>}
       <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {picks.map((pick) => {
@@ -1989,7 +1995,7 @@ function AdminView({ bets, transactions }: { bets: Bet[]; transactions: Transact
       <div className="rounded-md border border-white/10 bg-[#0b1210] p-4">
         <h2 className="mb-3 font-black text-white">Automation status</h2>
         <div className="grid gap-3 md:grid-cols-3">
-          {["Official scoreboards", "Transparent market odds", "Supabase realtime wallet"].map((item) => <div key={item} className="rounded-md bg-emerald-400/10 p-4 text-emerald-100"><Crown className="mb-2 h-5 w-5" />{item}<div className="mt-1 text-xs text-slate-400">Ready for production</div></div>)}
+          {["Live event feeds", "Calculated demo odds", "Supabase realtime wallet"].map((item) => <div key={item} className="rounded-md bg-emerald-400/10 p-4 text-emerald-100"><Crown className="mb-2 h-5 w-5" />{item}<div className="mt-1 text-xs text-slate-400">Ready for production</div></div>)}
         </div>
       </div>
     </section>
