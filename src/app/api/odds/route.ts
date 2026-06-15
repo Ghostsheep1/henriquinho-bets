@@ -6,6 +6,7 @@ export const revalidate = 0;
 
 const oddsApiKeyRaw = process.env.THE_ODDS_API_KEY ?? process.env.ODDS_API_KEY;
 const oddsApiKey = oddsApiKeyRaw && !oddsApiKeyRaw.includes("your-") ? oddsApiKeyRaw : undefined;
+const realOddsOnly = process.env.REAL_ODDS_ONLY !== "false";
 
 const realOddsSports: Array<{ key: string; sport: SportKey; league: string; country: string }> = [
   { key: "soccer_fifa_world_cup", sport: "soccer", league: "FIFA World Cup", country: "World" },
@@ -234,7 +235,9 @@ function normalizeFallbackEvent(event: EspnEvent, config: (typeof fallbackScoreb
 async function getRealOdds() {
   if (!oddsApiKey) return null;
   const activeSportsResponse = await fetch(`https://api.the-odds-api.com/v4/sports/?apiKey=${oddsApiKey}`, { cache: "no-store" });
-  if (!activeSportsResponse.ok) return null;
+  if (!activeSportsResponse.ok) {
+    throw new Error(`The Odds API sports request failed: ${activeSportsResponse.status}`);
+  }
   const activeSports = (await activeSportsResponse.json()) as Array<{ key: string; active: boolean }>;
   const activeKeys = new Set(activeSports.filter((sport) => sport.active).map((sport) => sport.key));
   const configs = realOddsSports.filter((config) => activeKeys.has(config.key));
@@ -247,7 +250,7 @@ async function getRealOdds() {
       url.searchParams.set("oddsFormat", "decimal");
       url.searchParams.set("dateFormat", "iso");
       const response = await fetch(url, { cache: "no-store" });
-      if (!response.ok) return [];
+      if (!response.ok) throw new Error(`${config.key} odds request failed: ${response.status}`);
       const payload = (await response.json()) as OddsApiEvent[];
       return payload.map((event) => normalizeOddsEvent(event, config)).filter(Boolean) as Match[];
     }),
@@ -275,22 +278,52 @@ async function getFallbackOdds() {
   return results.flat();
 }
 
+function stripCalculatedOdds(matches: Match[]) {
+  if (!realOddsOnly) return matches;
+  return matches.map((match) => ({
+    ...match,
+    odds: undefined,
+    oddsSource: undefined,
+    oddsProvider: undefined,
+    oddsUpdatedAt: undefined,
+  }));
+}
+
 export async function GET() {
   try {
     const realOdds = await getRealOdds();
     if (realOdds?.length) {
-      return NextResponse.json({ source: "odds-api", oddsSource: "real-provider", configured: true, matches: realOdds, message: "ok" });
+      return NextResponse.json({
+        source: "odds-api",
+        oddsSource: "real-provider",
+        configured: true,
+        realOddsOnly,
+        matches: realOdds,
+        message: "Realtime bookmaker odds loaded",
+      });
     }
 
     const fallback = await getFallbackOdds();
     return NextResponse.json({
       source: "espn-public",
-      oddsSource: "calculated-demo",
+      oddsSource: realOddsOnly ? "real-provider" : "calculated-demo",
       configured: Boolean(oddsApiKey),
-      matches: fallback,
-      message: oddsApiKey ? "Real odds temporarily unavailable" : "Add THE_ODDS_API_KEY for real sportsbook odds",
+      realOddsOnly,
+      matches: stripCalculatedOdds(fallback),
+      message: oddsApiKey
+        ? "The Odds API returned no active bookmaker odds for these events yet."
+        : "Missing THE_ODDS_API_KEY or ODDS_API_KEY. Add a real key for realtime bookmaker odds.",
     });
-  } catch {
-    return NextResponse.json({ source: "odds-api", oddsSource: oddsApiKey ? "real-provider" : "calculated-demo", configured: Boolean(oddsApiKey), matches: [], message: "Odds updating soon" });
+  } catch (error) {
+    const fallback = await getFallbackOdds().catch(() => []);
+    return NextResponse.json({
+      source: "odds-api",
+      oddsSource: realOddsOnly ? "real-provider" : "calculated-demo",
+      configured: Boolean(oddsApiKey),
+      realOddsOnly,
+      matches: stripCalculatedOdds(fallback),
+      message: oddsApiKey ? "Realtime odds provider error. Check API quota/key and try again." : "Missing real odds API key.",
+      providerError: error instanceof Error ? error.message : "Unknown odds provider error",
+    });
   }
 }

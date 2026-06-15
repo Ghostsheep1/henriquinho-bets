@@ -169,6 +169,8 @@ type SportsPayload = {
   matches: Match[];
   worldCup?: Match[];
   message: string;
+  providerError?: string;
+  realOddsOnly?: boolean;
   oddsSource?: "real-provider" | "calculated-demo";
 };
 
@@ -399,7 +401,7 @@ function useLiveSports(pollMs: number) {
         if (!active) return;
         setMatches(freshMatches);
         setWorldCup((football.worldCup ?? []).filter(isFreshMarket));
-        setMessage(!odds.configured || !football.configured ? "Markets updating soon" : odds.message === "ok" || football.message === "ok" ? "Realtime odds loaded" : odds.message);
+        setMessage(odds.configured && odds.oddsSource === "real-provider" ? odds.message : odds.message || "Realtime odds key required");
       } catch {
         if (!active) return;
         setMatches([]);
@@ -1027,13 +1029,13 @@ function MatchCard({ match, addPick, slip }: { match: Match; addPick: (pick: Bet
           <p className="text-sm text-slate-400">{match.score ?? dateTime.format(new Date(match.startsAt))} {match.minute ? `- ${match.minute}` : ""}</p>
         </div>
         <div className={clsx("rounded-md px-3 py-2 text-sm font-bold", realOdds ? "bg-emerald-400/10 text-emerald-200" : "bg-amber-300/10 text-amber-100")}>
-          {paused ? "Odds refresh locked" : bettingOpen && match.odds ? realOdds ? "Realtime odds" : "Calculated demo odds" : match.status === "finished" ? "Final" : "Odds updating soon"}
+          {paused ? "Odds refresh locked" : bettingOpen && match.odds ? realOdds ? "Realtime odds" : "Calculated demo odds" : match.status === "finished" ? "Final" : "Realtime odds required"}
         </div>
       </div>
       {realOdds && match.oddsUpdatedAt && <div className="mt-3 rounded-md border border-emerald-300/20 bg-emerald-400/10 px-3 py-2 text-xs text-emerald-100">Provider: {match.oddsProvider}. Updated {new Date(match.oddsUpdatedAt).toLocaleTimeString()}.</div>}
       {!realOdds && match.odds && <div className="mt-3 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs text-amber-100">Demo fallback odds. Add THE_ODDS_API_KEY to show realtime sportsbook odds.</div>}
       {paused && <div className="mt-3 rounded-md border border-red-300/20 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-100">Live betting paused until the odds provider refreshes this market.</div>}
-      {picks.length === 0 && <div className="mt-4 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-3 text-sm text-amber-100">{paused ? "Waiting for fresh live odds" : bettingOpen ? "Odds updating soon" : "Betting closed"}</div>}
+      {picks.length === 0 && <div className="mt-4 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-3 text-sm text-amber-100">{paused ? "Waiting for fresh live odds" : bettingOpen ? "Add THE_ODDS_API_KEY or ODDS_API_KEY to show realtime bookmaker odds." : "Betting closed"}</div>}
       <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {picks.map((pick) => {
           const selected = slip.some((item) => item.id === pick.id);

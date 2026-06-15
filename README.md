@@ -32,6 +32,9 @@ NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-supabase-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key-for-server-jobs-only
 THE_ODDS_API_KEY=your-the-odds-api-key
+ODDS_API_KEY=your-the-odds-api-key
+REAL_ODDS_ONLY=true
+API_FOOTBALL_KEY=your-api-football-key
 ```
 
 Free-tier sources:
@@ -54,18 +57,18 @@ The schema creates `profiles`, `transactions`, `matches`, `bets`, and `game_roun
 
 ## API routes
 
-- `GET /api/odds`: uses The Odds API for realtime bookmaker odds when `THE_ODDS_API_KEY` is set, then falls back to calculated demo prices for local no-key mode.
+- `GET /api/odds`: uses The Odds API for realtime bookmaker odds when `THE_ODDS_API_KEY` or `ODDS_API_KEY` is set. With `REAL_ODDS_ONLY=true`, scoreboard events still show but calculated demo prices are not bettable.
 - `GET /api/football`: fetches featured soccer tournament scoreboards for the featured tournament panel.
 - `POST /api/settle`: placeholder settlement endpoint for a cron worker that compares open bets against final provider results.
 
-The routes cache for 60 seconds to protect free-tier quotas.
+The sports UI polls often, but true odds freshness is limited by the provider and your free-tier quota.
 
 ## Vercel deployment
 
 1. Push the repo to GitHub.
 2. Create a new Vercel project from the repo.
 3. Set the project root to `henriquinho-bets`.
-4. Add the Supabase variables from `.env.local` in Vercel Project Settings -> Environment Variables.
+4. Add the Supabase and odds variables from `.env.local` in Vercel Project Settings -> Environment Variables.
 5. Deploy.
 6. In Supabase Auth URL settings, add your Vercel URL to Site URL and Redirect URLs.
 7. Redeploy after any environment variable change.
