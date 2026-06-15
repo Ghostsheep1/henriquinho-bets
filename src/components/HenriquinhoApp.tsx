@@ -6,6 +6,7 @@ import {
   Crown,
   Gamepad2,
   Goal,
+  Info,
   LogIn,
   Menu,
   Sparkles,
@@ -796,13 +797,47 @@ function GameModal({ game, balance, soundOn, onClose, onResult }: { game: string
             <div className="text-xs uppercase text-emerald-300">Game</div>
             <h2 className="text-2xl font-black text-white">{game}</h2>
           </div>
-          <button onClick={onClose} className="rounded-md border border-white/10 p-2" aria-label="Close game"><X className="h-5 w-5" /></button>
+          <div className="flex items-center gap-2">
+            <GameHelp game={game} />
+            <button onClick={onClose} className="rounded-md border border-white/10 p-2" aria-label="Close game"><X className="h-5 w-5" /></button>
+          </div>
         </div>
         <div className="min-h-0 flex-1 overflow-auto p-4">
           {renderGame(game, balance, settle)}
         </div>
       </div>
     </div>
+  );
+}
+
+function helpText(game: string) {
+  if (game === "Crash") return "Start a round and cash out before the multiplier crashes. The longer you wait, the higher the payout and risk.";
+  if (game === "Double") return "Pick red or black. The wheel spins, and a correct pick doubles your stake. A miss loses the stake.";
+  if (game === "Mines") return "Start a board, reveal safe gems, then cash out before hitting a mine. More safe reveals increase the multiplier.";
+  if (game === "Plinko") return "Choose risk, drop the ball, and watch it bounce through pegs into a multiplier bucket.";
+  if (game === "Dice") return "Choose over or under, set the target number, then roll. Harder targets pay higher multipliers.";
+  if (game === "Limbo") return "Set a target multiplier. If the rising result clears your target, you win the target payout.";
+  if (game === "HiLo") return "Guess whether the next card will be higher or lower. Build a streak, then cash out before missing.";
+  if (game === "Coin Flip") return "Pick a side and flip. Correct side pays double, wrong side loses the stake.";
+  if (game.includes("Roulette")) return "Place chips on numbers or outside bets like red, black, odd, or even, then spin the wheel.";
+  if (game === "Blackjack") return "Deal cards, hit or stand, and beat the dealer without going over 21.";
+  if (game.includes("Slots") || game.includes("Reels") || game.includes("Crown")) return "Spin five reels. Three or more matching symbols trigger line wins.";
+  if (game === "Penalty Shootout" || game === "Free Kick" || game === "Basketball Shots") return "Pick a target zone. Avoid the defender to score and win.";
+  if (game === "Drop the Pin" || game === "City Roulette" || game === "Distance Bet") return "Play the map challenge and let the target city decide the round result.";
+  return "Set your stake and play the round. The animated reveal shows the result and updates your balance.";
+}
+
+function GameHelp({ game }: { game: string }) {
+  return (
+    <details className="group relative">
+      <summary className="flex cursor-pointer list-none items-center justify-center rounded-md border border-white/10 bg-white/5 p-2 text-slate-200 hover:bg-white/10" aria-label={`How to play ${game}`}>
+        <Info className="h-5 w-5" />
+      </summary>
+      <div className="absolute right-0 top-11 z-20 w-72 rounded-md border border-amber-300/20 bg-[#0b1210] p-4 text-sm text-slate-200 shadow-2xl">
+        <div className="mb-1 text-xs font-black uppercase text-amber-200">How to play</div>
+        {helpText(game)}
+      </div>
+    </details>
   );
 }
 
@@ -823,9 +858,11 @@ function playTone(enabled: boolean, frequency: number) {
 
 function renderGame(game: string, balance: number, settle: (label: string, amount: number) => void) {
   if (game === "Crash") return <CrashModalGame balance={balance} settle={settle} />;
+  if (game === "Double" || game === "Coin Flip") return <DoubleModalGame game={game} balance={balance} settle={settle} />;
   if (game === "Mines") return <MinesModalGame balance={balance} settle={settle} />;
   if (game === "Plinko") return <PlinkoModalGame balance={balance} settle={settle} />;
   if (game === "Dice") return <DiceModalGame balance={balance} settle={settle} />;
+  if (game === "Limbo") return <LimboModalGame balance={balance} settle={settle} />;
   if (game === "HiLo") return <HiLoModalGame balance={balance} settle={settle} />;
   if (game.includes("Roulette")) return <RouletteModalGame game={game} balance={balance} settle={settle} />;
   if (game === "Blackjack") return <BlackjackModalGame balance={balance} settle={settle} />;
@@ -994,36 +1031,154 @@ function MinesModalGame({ balance, settle }: { balance: number; settle: (label: 
   );
 }
 
+function DoubleModalGame({ game, balance, settle }: { game: string; balance: number; settle: (label: string, amount: number) => void }) {
+  const [stake, setStake] = useState(25);
+  const [choice, setChoice] = useState<"Red" | "Black">("Red");
+  const [spinning, setSpinning] = useState(false);
+  const [tick, setTick] = useState(0);
+  const [result, setResult] = useState("");
+  const spin = () => {
+    if (stake > balance || spinning) return;
+    setSpinning(true);
+    setResult("");
+    setTick(0);
+    let frames = 0;
+    const timer = window.setInterval(() => {
+      frames += 1;
+      setTick((value) => value + 1);
+      if (frames >= 18) {
+        window.clearInterval(timer);
+        const landed: "Red" | "Black" = Math.random() > 0.5 ? "Red" : "Black";
+        const won = landed === choice;
+        setTick(landed === "Red" ? 0 : 1);
+        setSpinning(false);
+        setResult(`${landed} landed. ${won ? `Won +${currency.format(stake)}` : `Lost ${currency.format(stake)}`}.`);
+        settle(game, won ? stake : -stake);
+      }
+    }, 110);
+  };
+  const visibleColor = tick % 2 === 0 ? "Red" : "Black";
+  return (
+    <div className="rounded-md bg-[radial-gradient(circle_at_center,_#1f2937,_#111827_55%,_#020617)] p-5">
+      <ModalStake stake={stake} setStake={setStake} disabled={spinning} />
+      <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
+        <div className="relative flex h-96 items-center justify-center overflow-hidden rounded-md border border-white/10 bg-black/35">
+          <div className={clsx("absolute h-72 w-72 rounded-full border-[18px] shadow-[0_0_60px_rgba(250,204,21,.2)] transition-transform duration-100", spinning && "animate-spin", visibleColor === "Red" ? "border-red-500 bg-red-950" : "border-zinc-200 bg-zinc-950")} />
+          <div className="absolute h-20 w-2 rounded bg-amber-300 shadow-[0_0_20px_rgba(251,191,36,.8)]" />
+          <div className={clsx("z-10 rounded-md px-5 py-3 text-5xl font-black", visibleColor === "Red" ? "bg-red-500 text-white" : "bg-white text-black")}>{visibleColor}</div>
+        </div>
+        <div className="rounded-md border border-white/10 bg-white/[0.04] p-4">
+          <div className="text-xs uppercase text-slate-400">Pick a side</div>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            {(["Red", "Black"] as const).map((item) => (
+              <button key={item} disabled={spinning} onClick={() => setChoice(item)} className={clsx("rounded-md py-4 font-black", choice === item ? "bg-amber-300 text-black" : item === "Red" ? "bg-red-600 text-white" : "bg-zinc-100 text-black")}>{item}</button>
+            ))}
+          </div>
+          <div className="mt-4 rounded-md bg-black/25 p-3 text-sm text-slate-300">Correct pick pays 2x. The wheel cycles before revealing the final color.</div>
+          <button disabled={spinning || stake > balance} onClick={spin} className="mt-4 w-full rounded-md bg-emerald-400 py-3 font-black text-black disabled:opacity-40">{spinning ? "Spinning..." : `Spin ${choice}`}</button>
+          <ResultBanner result={result} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PlinkoModalGame({ balance, settle }: { balance: number; settle: (label: string, amount: number) => void }) {
   const [stake, setStake] = useState(25);
   const [risk, setRisk] = useState("Medium");
   const [path, setPath] = useState<number[]>([]);
+  const [step, setStep] = useState(0);
+  const [dropping, setDropping] = useState(false);
   const [result, setResult] = useState("");
   const multipliers = risk === "High" ? [15, 5, 2, 0.3, 0.2, 0.3, 2, 5, 15] : risk === "Low" ? [2, 1.4, 1.1, 0.8, 0.5, 0.8, 1.1, 1.4, 2] : [10, 3, 1.5, 0.5, 0.2, 0.5, 1.5, 3, 10];
   const drop = () => {
+    if (dropping || stake > balance) return;
     let position = 4;
     const steps = Array.from({ length: 8 }, () => {
       position += Math.random() > 0.5 ? 1 : -1;
       position = Math.max(0, Math.min(8, position));
       return position;
     });
-    setPath(steps);
+    const fullPath = [4, ...steps];
+    setPath(fullPath);
+    setStep(0);
+    setDropping(true);
+    setResult("");
     const multi = multipliers[position];
     const profit = payout(stake, multi) - stake;
-    window.setTimeout(() => {
-      setResult(`${multi}x bucket. ${profit >= 0 ? `Won +${currency.format(profit)}` : `Lost ${currency.format(Math.abs(profit))}`}.`);
-      settle("Plinko", profit);
-    }, 900);
+    let current = 0;
+    const timer = window.setInterval(() => {
+      current += 1;
+      setStep(current);
+      if (current >= fullPath.length - 1) {
+        window.clearInterval(timer);
+        window.setTimeout(() => {
+          setDropping(false);
+          setResult(`${multi}x bucket. ${profit >= 0 ? `Won +${currency.format(profit)}` : `Lost ${currency.format(Math.abs(profit))}`}.`);
+          settle("Plinko", profit);
+        }, 260);
+      }
+    }, 180);
   };
+  const ballPosition = path[step] ?? 4;
   return (
     <div className="rounded-md bg-slate-950 p-4">
-      <div className="mb-4 flex flex-wrap items-end justify-between gap-3"><ModalStake stake={stake} setStake={setStake} /><Select value={risk} setValue={setRisk} options={["Low", "Medium", "High"]} /></div>
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-3"><ModalStake stake={stake} setStake={setStake} disabled={dropping} /><Select value={risk} setValue={setRisk} options={["Low", "Medium", "High"]} /></div>
       <div className="relative mx-auto h-96 max-w-3xl rounded-md bg-black/40 p-4">
         {Array.from({ length: 8 }, (_, row) => <div key={row} className="flex justify-center gap-8 py-2">{Array.from({ length: row + 3 }, (_, peg) => <span key={peg} className="h-3 w-3 rounded-full bg-emerald-300" />)}</div>)}
-        {path.length > 0 && <div className="absolute top-8 h-5 w-5 rounded-full bg-amber-300 transition-all duration-700" style={{ left: `${10 + (path[path.length - 1] ?? 4) * 9}%`, top: `${18 + path.length * 8}%` }} />}
+        {path.length > 0 && <div className="absolute h-6 w-6 rounded-full bg-amber-300 shadow-[0_0_24px_rgba(251,191,36,.9)] transition-all duration-200" style={{ left: `${10 + ballPosition * 9}%`, top: `${12 + step * 8}%` }} />}
         <div className="absolute bottom-3 left-3 right-3 grid grid-cols-9 gap-1">{multipliers.map((multi, index) => <div key={index} className="rounded bg-emerald-400/20 py-3 text-center text-sm font-black">{multi}x</div>)}</div>
       </div>
-      <button disabled={stake > balance} onClick={drop} className="mt-4 w-full rounded-md bg-emerald-400 py-3 font-black text-black disabled:opacity-40">Drop Ball</button>
+      <button disabled={dropping || stake > balance} onClick={drop} className="mt-4 w-full rounded-md bg-emerald-400 py-3 font-black text-black disabled:opacity-40">{dropping ? "Ball dropping..." : "Drop Ball"}</button>
+      <ResultBanner result={result} />
+    </div>
+  );
+}
+
+function LimboModalGame({ balance, settle }: { balance: number; settle: (label: string, amount: number) => void }) {
+  const [stake, setStake] = useState(25);
+  const [target, setTarget] = useState(2);
+  const [display, setDisplay] = useState(1);
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState("");
+  const play = () => {
+    if (running || stake > balance) return;
+    const final = Number((1 + Math.random() * 9).toFixed(2));
+    const won = final >= target;
+    const profit = won ? payout(stake, target) - stake : -stake;
+    setDisplay(1);
+    setRunning(true);
+    setResult("");
+    let frames = 0;
+    const timer = window.setInterval(() => {
+      frames += 1;
+      setDisplay((value) => Number(Math.min(final, value + Math.max(0.05, final / 24)).toFixed(2)));
+      if (frames >= 26) {
+        window.clearInterval(timer);
+        setDisplay(final);
+        setRunning(false);
+        setResult(`${final}x result. ${won ? `Cleared ${target}x and won +${currency.format(profit)}` : `Missed ${target}x and lost ${currency.format(stake)}`}.`);
+        settle("Limbo", profit);
+      }
+    }, 70);
+  };
+  return (
+    <div className="rounded-md bg-[linear-gradient(135deg,_#082f49,_#111827)] p-5">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <ModalStake stake={stake} setStake={setStake} disabled={running} />
+        <label className="min-w-48 text-xs uppercase text-slate-400">
+          Target multiplier
+          <input disabled={running} type="number" min={1.1} max={10} step={0.1} value={target} onChange={(event) => setTarget(Number(event.target.value))} className="mt-1 w-full rounded-md border border-white/10 bg-black/30 px-3 py-3 text-base text-white" />
+        </label>
+      </div>
+      <div className="relative mt-6 h-80 overflow-hidden rounded-md border border-sky-300/20 bg-black/35">
+        <div className="absolute bottom-0 left-0 right-0 h-1/2 bg-[linear-gradient(180deg,_transparent,_rgba(14,165,233,.12))]" />
+        <div className="absolute left-6 right-6 top-1/2 h-px bg-amber-300/60" />
+        <div className="absolute left-8 top-[calc(50%-28px)] rounded bg-amber-300 px-2 py-1 text-xs font-black text-black">Target {target.toFixed(2)}x</div>
+        <div className="absolute text-5xl transition-all duration-100" style={{ left: `${Math.min(84, 8 + display * 7)}%`, bottom: `${Math.min(76, 8 + display * 7)}%` }}>↗</div>
+        <div className={clsx("absolute inset-0 flex items-center justify-center text-7xl font-black", running ? "text-sky-200" : display >= target ? "text-emerald-300" : "text-red-300")}>{display.toFixed(2)}x</div>
+      </div>
+      <button disabled={running || stake > balance} onClick={play} className="mt-4 w-full rounded-md bg-emerald-400 py-3 font-black text-black disabled:opacity-40">{running ? "Climbing..." : "Start Limbo"}</button>
       <ResultBanner result={result} />
     </div>
   );
@@ -1034,24 +1189,41 @@ function DiceModalGame({ balance, settle }: { balance: number; settle: (label: s
   const [target, setTarget] = useState(50);
   const [mode, setMode] = useState("over");
   const [rollValue, setRollValue] = useState<number | null>(null);
+  const [rolling, setRolling] = useState(false);
+  const [result, setResult] = useState("");
   const chance = mode === "over" ? 100 - target : target;
   const multi = Number((95 / Math.max(1, chance)).toFixed(2));
   const roll = () => {
+    if (rolling || stake > balance) return;
     const value = Math.floor(Math.random() * 100) + 1;
-    setRollValue(value);
-    const win = mode === "over" ? value > target : value < target;
-    settle("Dice", win ? payout(stake, multi) - stake : -stake);
+    setRolling(true);
+    setResult("");
+    let frames = 0;
+    const timer = window.setInterval(() => {
+      frames += 1;
+      setRollValue(Math.floor(Math.random() * 100) + 1);
+      if (frames >= 14) {
+        window.clearInterval(timer);
+        setRollValue(value);
+        setRolling(false);
+        const win = mode === "over" ? value > target : value < target;
+        const amount = win ? payout(stake, multi) - stake : -stake;
+        setResult(`${value} rolled. ${win ? `Won +${currency.format(amount)}` : `Lost ${currency.format(stake)}`}.`);
+        settle("Dice", amount);
+      }
+    }, 70);
   };
   return (
     <div className="rounded-md bg-[linear-gradient(135deg,_#111827,_#064e3b)] p-5">
-      <ModalStake stake={stake} setStake={setStake} />
-      <div className="mt-6 flex h-48 items-center justify-center rounded-md bg-black/30 text-7xl font-black text-white">{rollValue ?? "?"}</div>
+      <ModalStake stake={stake} setStake={setStake} disabled={rolling} />
+      <div className={clsx("mt-6 flex h-48 items-center justify-center rounded-md bg-black/30 text-7xl font-black text-white transition", rolling && "animate-pulse")}>{rollValue ?? "?"}</div>
       <div className="mt-4 grid gap-4 md:grid-cols-2">
         <Select value={mode} setValue={setMode} options={["over", "under"]} />
         <div className="text-sm text-slate-200">Win chance {chance}% - Payout {multi}x</div>
       </div>
-      <input type="range" min="1" max="99" value={target} onChange={(event) => setTarget(Number(event.target.value))} className="mt-4 w-full accent-emerald-400" />
-      <button disabled={stake > balance} onClick={roll} className="mt-4 w-full rounded-md bg-emerald-400 py-3 font-black text-black disabled:opacity-40">Roll {mode} {target}</button>
+      <input disabled={rolling} type="range" min="1" max="99" value={target} onChange={(event) => setTarget(Number(event.target.value))} className="mt-4 w-full accent-emerald-400" />
+      <button disabled={rolling || stake > balance} onClick={roll} className="mt-4 w-full rounded-md bg-emerald-400 py-3 font-black text-black disabled:opacity-40">{rolling ? "Rolling..." : `Roll ${mode} ${target}`}</button>
+      <ResultBanner result={result} />
     </div>
   );
 }
@@ -1286,19 +1458,39 @@ function MapModalGame({ game, balance, settle }: { game: string; balance: number
 function InstantModalGame({ game, balance, settle }: { game: string; balance: number; settle: (label: string, amount: number) => void }) {
   const [stake, setStake] = useState(25);
   const [result, setResult] = useState("");
+  const [revealed, setRevealed] = useState<number[]>([]);
+  const [playing, setPlaying] = useState(false);
   const play = () => {
+    if (playing || stake > balance) return;
     const multiplier = [0, 0, 0.5, 1.5, 2, 5, 10][Math.floor(Math.random() * 7)];
     const amount = payout(stake, multiplier) - stake;
-    setResult(multiplier > 1 ? `${multiplier}x. Won +${currency.format(amount)}.` : `Result ${multiplier}x. Lost ${currency.format(Math.abs(amount))}.`);
-    settle(game, amount);
+    setPlaying(true);
+    setRevealed([]);
+    setResult("");
+    let index = 0;
+    const timer = window.setInterval(() => {
+      setRevealed((items) => [...items, index]);
+      index += 1;
+      if (index >= 9) {
+        window.clearInterval(timer);
+        window.setTimeout(() => {
+          setPlaying(false);
+          setResult(multiplier > 1 ? `${multiplier}x. Won +${currency.format(amount)}.` : `Result ${multiplier}x. Lost ${currency.format(Math.abs(amount))}.`);
+          settle(game, amount);
+        }, 250);
+      }
+    }, 90);
   };
   return (
     <div className="rounded-md bg-[linear-gradient(135deg,_#111827,_#312e81)] p-5">
-      <ModalStake stake={stake} setStake={setStake} />
+      <ModalStake stake={stake} setStake={setStake} disabled={playing} />
       <div className="mt-6 grid grid-cols-3 gap-3">
-        {Array.from({ length: 9 }, (_, index) => <div key={index} className="flex h-24 items-center justify-center rounded-md bg-white/10 text-3xl font-black text-amber-200">?</div>)}
+        {Array.from({ length: 9 }, (_, index) => {
+          const isOpen = revealed.includes(index);
+          return <div key={index} className={clsx("flex h-24 items-center justify-center rounded-md text-3xl font-black transition-all duration-200", isOpen ? "scale-105 bg-amber-300 text-black" : "bg-white/10 text-amber-200", playing && !isOpen && "animate-pulse")}>{isOpen ? ["★", "$", "7", "◆", "✓"][index % 5] : "?"}</div>;
+        })}
       </div>
-      <button disabled={stake > balance} onClick={play} className="mt-4 w-full rounded-md bg-emerald-400 py-3 font-black text-black disabled:opacity-40">Play {game}</button>
+      <button disabled={playing || stake > balance} onClick={play} className="mt-4 w-full rounded-md bg-emerald-400 py-3 font-black text-black disabled:opacity-40">{playing ? "Revealing..." : `Play ${game}`}</button>
       <ResultBanner result={result} />
     </div>
   );
