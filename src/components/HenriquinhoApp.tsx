@@ -61,6 +61,30 @@ type Language = "en" | "pt" | "es";
 const adminEmail = "henrique@henriquinhobets.com";
 const adminPassword = "HenriqueAdmin2026!";
 
+const leaguePopularity: Record<string, number> = {
+  "FIFA World Cup": 100,
+  "UEFA Euro": 96,
+  "Champions League": 94,
+  "Premier League": 92,
+  NBA: 88,
+  NFL: 87,
+  "Copa Libertadores": 84,
+  "Brazilian Serie A": 82,
+  "La Liga": 80,
+  "Serie A": 78,
+  Bundesliga: 76,
+  "Ligue 1": 74,
+  MLS: 70,
+  MLB: 68,
+  NHL: 66,
+  "Europa League": 64,
+  "Olympic Soccer": 62,
+  "FIFA Women's World Cup": 60,
+  "Conference League": 56,
+  NWSL: 52,
+  "UFC/MMA": 50,
+};
+
 const languageLabels: Record<Language, string> = { en: "English", pt: "Português", es: "Español" };
 
 const copy: Record<Language, Record<string, string>> = {
@@ -76,7 +100,6 @@ const copy: Record<Language, Record<string, string>> = {
     "login.submit": "Login / Create beta account",
     "login.guest": "Join as guest",
     "login.password": "Password",
-    "login.adminHint": "Admin preset: henrique@henriquinhobets.com / HenriqueAdmin2026!",
     "hero.badge": "live odds, casino games, premium markets",
     "hero.copy": "Sports betting, casino games, live markets, wallet history, leaderboard, and account analytics in one polished dark trading floor.",
     "hero.odds": "Browse odds",
@@ -97,7 +120,6 @@ const copy: Record<Language, Record<string, string>> = {
     "login.submit": "Entrar / Criar conta beta",
     "login.guest": "Entrar como convidado",
     "login.password": "Senha",
-    "login.adminHint": "Admin preset: henrique@henriquinhobets.com / HenriqueAdmin2026!",
     "hero.badge": "odds ao vivo, cassino, mercados premium",
     "hero.copy": "Apostas esportivas, cassino, mercados ao vivo, carteira, ranking e análises em uma plataforma escura e polida.",
     "hero.odds": "Ver odds",
@@ -118,7 +140,6 @@ const copy: Record<Language, Record<string, string>> = {
     "login.submit": "Entrar / Crear cuenta beta",
     "login.guest": "Entrar como invitado",
     "login.password": "Contraseña",
-    "login.adminHint": "Admin preset: henrique@henriquinhobets.com / HenriqueAdmin2026!",
     "hero.badge": "cuotas en vivo, casino, mercados premium",
     "hero.copy": "Apuestas deportivas, casino, mercados en vivo, billetera, ranking y análisis en una plataforma oscura y pulida.",
     "hero.odds": "Ver cuotas",
@@ -189,6 +210,34 @@ function isInPlayMarket(match: Match) {
   if (match.status !== "upcoming" || !Number.isFinite(startsAt)) return false;
   const timeUntilStart = startsAt - Date.now();
   return timeUntilStart >= 0 && timeUntilStart <= 24 * 60 * 60 * 1000;
+}
+
+function isUpcomingMarket(match: Match) {
+  const startsAt = new Date(match.startsAt).getTime();
+  if (match.status !== "upcoming" || !Number.isFinite(startsAt)) return false;
+  const timeUntilStart = startsAt - Date.now();
+  return timeUntilStart >= 0 && timeUntilStart <= 14 * 24 * 60 * 60 * 1000;
+}
+
+function timeUntilStart(match: Match) {
+  const startsAt = new Date(match.startsAt).getTime();
+  return Number.isFinite(startsAt) ? startsAt - Date.now() : Number.MAX_SAFE_INTEGER;
+}
+
+function popularityScore(match: Match) {
+  return leaguePopularity[match.league] ?? (match.sport === "soccer" ? 45 : 35);
+}
+
+function sportsbookRank(a: Match, b: Match) {
+  const scoreGap = popularityScore(b) - popularityScore(a);
+  if (scoreGap !== 0) return scoreGap;
+  return timeUntilStart(a) - timeUntilStart(b);
+}
+
+function inPlayRank(a: Match, b: Match) {
+  if (a.status === "live" && b.status !== "live") return -1;
+  if (a.status !== "live" && b.status === "live") return 1;
+  return timeUntilStart(a) - timeUntilStart(b);
 }
 
 function matchStatusLabel(match: Match) {
@@ -520,7 +569,6 @@ function LoginGate({ language, setLanguage, onEnter }: { language: Language; set
           <button type="button" onClick={enterWithCredentials} className="mt-5 w-full rounded-md bg-emerald-400 py-3 font-black text-black">{t(language, "login.submit")}</button>
           <button type="button" onClick={() => onEnter({ name: "Guest Player", email: "guest@henriquinhobets.local", guest: true })} className="mt-3 w-full rounded-md border border-amber-200/40 bg-amber-300/10 py-3 font-black text-amber-100">{t(language, "login.guest")}</button>
           <div className="mt-4 rounded-md bg-black/25 px-3 py-3 text-xs text-slate-400">Guest mode is for beta testing only. Hosted Supabase accounts can be connected after launch.</div>
-          <div className="mt-2 rounded-md border border-emerald-300/20 bg-emerald-400/10 px-3 py-3 text-xs text-emerald-100">{t(language, "login.adminHint")}</div>
         </form>
       </section>
     </main>
@@ -659,10 +707,14 @@ function Hero({ setActive, language }: { setActive: (id: string) => void; langua
 function Sportsbook({ liveOnly, matches, worldCup, loading, message, slip, setSlip }: { liveOnly?: boolean; matches: Match[]; worldCup: Match[]; loading: boolean; message: string; slip: BetPick[]; setSlip: React.Dispatch<React.SetStateAction<BetPick[]>> }) {
   const [sport, setSport] = useState<SportKey | "all">("all");
   const [league, setLeague] = useState("All leagues");
-  const filteredMatches = useMemo(
-    () => matches.filter((match) => (sport === "all" || match.sport === sport) && (league === "All leagues" || match.league === league) && (!liveOnly || isInPlayMarket(match))),
-    [league, liveOnly, matches, sport],
-  );
+  const visibleMatches = useMemo(() => {
+    const base = matches.filter((match) => (sport === "all" || match.sport === sport) && (league === "All leagues" || match.league === league));
+    if (liveOnly) return base.filter(isInPlayMarket).sort(inPlayRank);
+    return base.filter(isUpcomingMarket).sort(sportsbookRank);
+  }, [league, liveOnly, matches, sport]);
+  const liveCount = matches.filter((match) => match.status === "live").length;
+  const startingSoonCount = matches.filter((match) => match.status !== "live" && isInPlayMarket(match)).length;
+  const upcomingCount = matches.filter(isUpcomingMarket).length;
   const addPick = (pick: BetPick) => {
     setSlip((items) => (items.some((item) => item.id === pick.id) ? items.filter((item) => item.id !== pick.id) : [...items.filter((item) => item.matchId !== pick.matchId || item.market !== pick.market), pick]));
   };
@@ -670,8 +722,25 @@ function Sportsbook({ liveOnly, matches, worldCup, loading, message, slip, setSl
   return (
     <section className="space-y-4">
       <WorldCupPanel matches={worldCup} loading={loading} message={message} />
+      <div className="grid gap-3 md:grid-cols-3">
+        {liveOnly ? (
+          <>
+            <MarketModeStat label="Live first" value={`${liveCount} live`} note="Active events always appear at the top." />
+            <MarketModeStat label="Next up" value={`${startingSoonCount} soon`} note="Upcoming within 24 hours, sorted by kickoff." />
+            <MarketModeStat label="Closed hidden" value="No finals" note="Finished games stay out of the betting flow." />
+          </>
+        ) : (
+          <>
+            <MarketModeStat label="Upcoming board" value={`${upcomingCount} open`} note="Only near-term bettable events." />
+            <MarketModeStat label="Popularity sort" value="Major leagues first" note="World Cup, top soccer, NBA/NFL, then others." />
+            <MarketModeStat label="No stale cards" value="14 day cap" note="Far-future and closed games are removed." />
+          </>
+        )}
+      </div>
       <div className="flex flex-wrap items-center gap-2">
-        {liveOnly && <div className="mr-2 rounded-md border border-red-300/20 bg-red-500/10 px-3 py-2 text-sm font-bold text-red-100">Live now + starting in 24h</div>}
+        <div className={clsx("mr-2 rounded-md border px-3 py-2 text-sm font-bold", liveOnly ? "border-red-300/20 bg-red-500/10 text-red-100" : "border-emerald-300/20 bg-emerald-400/10 text-emerald-100")}>
+          {liveOnly ? "Live now + next 24h" : "Upcoming by demand"}
+        </div>
         {(Object.keys(sportLabels) as Array<SportKey | "all">).map((key) => (
           <button key={key} onClick={() => setSport(key)} className={clsx("rounded-md border px-3 py-2 text-sm font-semibold", sport === key ? "border-emerald-300 bg-emerald-400 text-black" : "border-white/10 bg-white/5 text-slate-300")}>{sportLabels[key]}</button>
         ))}
@@ -679,8 +748,8 @@ function Sportsbook({ liveOnly, matches, worldCup, loading, message, slip, setSl
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_260px]">
         <div className="space-y-3">
           {loading && <SkeletonMarkets />}
-          {!loading && filteredMatches.length === 0 && <EmptyMarkets message={message} />}
-          {filteredMatches.map((match) => (
+          {!loading && visibleMatches.length === 0 && <EmptyMarkets message={liveOnly ? "No live or starting-soon markets" : message} />}
+          {visibleMatches.map((match) => (
             <MatchCard key={match.id} match={match} addPick={addPick} slip={slip} />
           ))}
         </div>
@@ -701,6 +770,16 @@ function Sportsbook({ liveOnly, matches, worldCup, loading, message, slip, setSl
         </div>
       </div>
     </section>
+  );
+}
+
+function MarketModeStat({ label, value, note }: { label: string; value: string; note: string }) {
+  return (
+    <div className="rounded-md border border-white/10 bg-[#0b1210] p-3">
+      <div className="text-xs uppercase text-slate-400">{label}</div>
+      <div className="mt-1 text-lg font-black text-white">{value}</div>
+      <p className="mt-1 text-xs text-slate-500">{note}</p>
+    </div>
   );
 }
 
@@ -986,6 +1065,15 @@ function RoundActivity({ game }: { game: string }) {
     </section>
   );
 }
+
+const demoLeaderboard = [
+  { name: "Mika", balance: 18420 },
+  { name: "Rafa", balance: 15780 },
+  { name: "Lia", balance: 12960 },
+  { name: "Bruno", balance: 10240 },
+  { name: "Sofia", balance: 9340 },
+  { name: "Theo", balance: 8120 },
+];
 
 function helpText(game: string) {
   if (game === "Crash") return "Start a round and cash out before the multiplier crashes. The longer you wait, the higher the payout and risk.";
@@ -1835,12 +1923,30 @@ function Stat({ label, value }: { label: string; value: string }) {
 }
 
 function Leaderboard({ user, balance }: { user: AppUser | null; balance: number }) {
+  const ranked = useMemo(
+    () => [
+      ...demoLeaderboard.map((player) => ({ ...player, demo: true })),
+      { name: user?.name ?? "Guest", balance, demo: false },
+    ].sort((a, b) => b.balance - a.balance),
+    [balance, user?.name],
+  );
   return (
     <div className="rounded-md border border-white/10 bg-[#0b1210] p-4">
-      <h2 className="mb-3 flex items-center gap-2 font-black text-white"><Trophy className="h-5 w-5 text-amber-300" />Leaderboard</h2>
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <h2 className="flex items-center gap-2 font-black text-white"><Trophy className="h-5 w-5 text-amber-300" />Leaderboard</h2>
+        <span className="rounded bg-amber-300/10 px-2 py-1 text-[10px] font-bold uppercase text-amber-200">Beta seed</span>
+      </div>
       <div className="space-y-2">
-        <div className="flex items-center justify-between rounded-md bg-white/[0.04] px-3 py-2 text-sm"><div><span className="mr-2 text-amber-200">#1</span>{user?.name ?? "Guest"}<div className="text-xs text-slate-400">Current account</div></div><b>{currency.format(balance)}</b></div>
-        <div className="rounded-md bg-white/[0.04] px-3 py-3 text-xs text-slate-400">Connect Supabase to rank all registered users by balance.</div>
+        {ranked.slice(0, 7).map((player, index) => (
+          <div key={`${player.name}-${player.demo}`} className={clsx("flex items-center justify-between rounded-md px-3 py-2 text-sm", player.demo ? "bg-white/[0.04]" : "bg-emerald-400/10 text-emerald-100")}>
+            <div>
+              <span className="mr-2 text-amber-200">#{index + 1}</span>{player.name}
+              <div className="text-xs text-slate-400">{player.demo ? "Demo beta player" : "Current account"}</div>
+            </div>
+            <b>{currency.format(player.balance)}</b>
+          </div>
+        ))}
+        <div className="rounded-md bg-white/[0.04] px-3 py-3 text-xs text-slate-400">Demo rows keep the beta populated until Supabase has enough real users.</div>
       </div>
     </div>
   );
