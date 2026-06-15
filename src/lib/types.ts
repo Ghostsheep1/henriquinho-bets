@@ -47,13 +47,14 @@ export type Bet = {
   picks: BetPick[];
   stake: number;
   potentialWin: number;
-  status: "open" | "won" | "lost";
+  cashOut?: number;
+  status: "open" | "won" | "lost" | "cashed_out";
   createdAt: string;
 };
 
 export type Transaction = {
   id: string;
-  type: "signup_bonus" | "daily_bonus" | "deposit" | "bet_stake" | "bet_win" | "casino_win" | "casino_loss";
+  type: "signup_bonus" | "daily_bonus" | "deposit" | "bet_stake" | "bet_win" | "bet_cashout" | "casino_win" | "casino_loss";
   amount: number;
   label: string;
   createdAt: string;

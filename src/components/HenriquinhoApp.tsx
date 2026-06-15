@@ -305,7 +305,34 @@ function settlePicksFromMatches(picks: BetPick[], matchById: Map<string, Match>)
   return { ready, won };
 }
 
-function useLiveSports() {
+function currentPickOdds(pick: BetPick, match?: Match) {
+  if (!match?.odds || bettingPaused(match)) return null;
+  if (pick.market === "moneyline") {
+    if (pick.label === match.home) return match.odds.moneyline.home;
+    if (pick.label === match.away) return match.odds.moneyline.away;
+    if (pick.label === "Draw") return match.odds.moneyline.draw ?? null;
+  }
+  if (pick.market === "total" && match.odds.total) {
+    if (pick.label.startsWith("Over")) return match.odds.total.over;
+    if (pick.label.startsWith("Under")) return match.odds.total.under;
+  }
+  if (pick.market === "handicap" && match.odds.handicap) {
+    if (pick.label.startsWith(match.home)) return match.odds.handicap.home;
+    if (pick.label.startsWith(match.away)) return match.odds.handicap.away;
+  }
+  return null;
+}
+
+function cashOutOffer(bet: Bet, matchById: Map<string, Match>) {
+  if (bet.status !== "open") return null;
+  const currentOdds = bet.picks.map((pick) => currentPickOdds(pick, matchById.get(pick.matchId)));
+  if (currentOdds.some((odds) => !odds)) return null;
+  const currentCombined = currentOdds.filter((odds): odds is number => typeof odds === "number").reduce((total, odds) => total * odds, 1);
+  if (currentCombined <= 1) return null;
+  return Math.max(1, Math.floor((bet.potentialWin / currentCombined) * 0.96));
+}
+
+function useLiveSports(pollMs: number) {
   const [matches, setMatches] = useState<Match[]>([]);
   const [worldCup, setWorldCup] = useState<Match[]>([]);
   const [loading, setLoading] = useState(true);
@@ -350,12 +377,12 @@ function useLiveSports() {
     };
 
     load();
-    const timer = window.setInterval(load, 10000);
+    const timer = window.setInterval(load, pollMs);
     return () => {
       active = false;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [pollMs]);
 
   return { matches, worldCup, loading, message };
 }
@@ -376,7 +403,7 @@ export default function HenriquinhoApp() {
   const [lastBonus, setLastBonus] = useState<string | null>(null);
   const [depositOpen, setDepositOpen] = useState(false);
   const [soundOn, setSoundOn] = useState(true);
-  const { matches, worldCup, loading, message } = useLiveSports();
+  const { matches, worldCup, loading, message } = useLiveSports(active === "live" ? 1000 : 10000);
   const matchById = useMemo(() => new Map(matches.map((match) => [match.id, match])), [matches]);
 
   useEffect(() => {
@@ -453,6 +480,20 @@ export default function HenriquinhoApp() {
       }),
     );
     window.setTimeout(() => payouts.forEach((item) => addTransaction("bet_win", item.amount, item.label)), 0);
+  };
+
+  const cashOutBet = (id: string) => {
+    let offer = 0;
+    setBets((items) =>
+      items.map((bet) => {
+        if (bet.id !== id || bet.status !== "open") return bet;
+        const value = cashOutOffer(bet, matchById);
+        if (!value) return bet;
+        offer = value;
+        return { ...bet, status: "cashed_out", cashOut: value };
+      }),
+    );
+    if (offer > 0) window.setTimeout(() => addTransaction("bet_cashout", offer, "Bet cash out"), 0);
   };
 
   useEffect(() => {
@@ -546,13 +587,13 @@ export default function HenriquinhoApp() {
           {active === "live" && <Sportsbook liveOnly matches={matches} worldCup={worldCup} loading={loading} message={message} slip={slip} setSlip={setSlip} />}
           {active === "casino" && <Casino balance={balance} soundOn={soundOn} onResult={casinoResult} />}
           {active === "wallet" && <WalletView user={user} balance={balance} claimBonus={claimBonus} transactions={transactions} onDeposit={() => setDepositOpen(true)} onLock={lockAccess} riskSignals={riskSignals} />}
-          {active === "profile" && <ProfileView user={user} setUser={setUser} balance={balance} bets={bets} winCount={winCount} lossCount={lossCount} onLock={lockAccess} riskSignals={riskSignals} />}
+          {active === "profile" && <ProfileView user={user} setUser={setUser} balance={balance} bets={bets} winCount={winCount} lossCount={lossCount} onLock={lockAccess} riskSignals={riskSignals} settleBet={settleBet} cashOutBet={cashOutBet} cashOutValue={(bet) => cashOutOffer(bet, matchById)} />}
           {active === "admin" && isAdmin && <AdminView bets={bets} transactions={transactions} />}
         </main>
         <aside className="hidden w-80 shrink-0 space-y-4 xl:block">
           <BetSlip slip={slip} setSlip={setSlip} stake={stake} setStake={setStake} balance={balance} placeBet={placeBet} combinedOdds={combinedOdds} potentialWin={potentialWin} />
           <Leaderboard user={user} balance={balance} />
-          {!user?.guest && <BetHistory bets={bets} settleBet={settleBet} />}
+          {!user?.guest && <BetHistory bets={bets} settleBet={settleBet} cashOutBet={cashOutBet} cashOutValue={(bet) => cashOutOffer(bet, matchById)} />}
         </aside>
       </div>
       <div className="sticky bottom-0 z-30 border-t border-white/10 bg-[#08100d]/95 p-3 backdrop-blur xl:hidden">
@@ -1962,7 +2003,7 @@ function DepositModal({ open, onClose, onComplete }: { open: boolean; onClose: (
   );
 }
 
-function ProfileView({ user, setUser, balance, bets, winCount, lossCount, onLock, riskSignals }: { user: AppUser | null; setUser: (user: AppUser | null) => void; balance: number; bets: Bet[]; winCount: number; lossCount: number; onLock: () => void; riskSignals: RiskSignals }) {
+function ProfileView({ user, setUser, balance, bets, winCount, lossCount, onLock, riskSignals, settleBet, cashOutBet, cashOutValue }: { user: AppUser | null; setUser: (user: AppUser | null) => void; balance: number; bets: Bet[]; winCount: number; lossCount: number; onLock: () => void; riskSignals: RiskSignals; settleBet: (id: string) => void; cashOutBet: (id: string) => void; cashOutValue: (bet: Bet) => number | null }) {
   const [name, setName] = useState(user?.name ?? "");
   const [email, setEmail] = useState(user?.email ?? "");
   const decidedBets = winCount + lossCount;
@@ -1993,7 +2034,7 @@ function ProfileView({ user, setUser, balance, bets, winCount, lossCount, onLock
           {user?.guest ? (
             <div className="rounded-md border border-amber-300/20 bg-[#0b1210] p-4 text-sm text-amber-100">Guest mode keeps gameplay temporary, so bet history is hidden until you use a beta account.</div>
           ) : (
-            <BetHistory bets={bets} settleBet={() => undefined} />
+            <BetHistory bets={bets} settleBet={settleBet} cashOutBet={cashOutBet} cashOutValue={cashOutValue} />
           )}
         </div>
       </div>
@@ -2085,13 +2126,33 @@ function Leaderboard({ user, balance }: { user: AppUser | null; balance: number 
   );
 }
 
-function BetHistory({ bets, settleBet }: { bets: Bet[]; settleBet: (id: string) => void }) {
+function BetHistory({ bets, settleBet, cashOutBet, cashOutValue }: { bets: Bet[]; settleBet: (id: string) => void; cashOutBet: (id: string) => void; cashOutValue: (bet: Bet) => number | null }) {
   return (
     <div className="rounded-md border border-white/10 bg-[#0b1210] p-4">
       <h2 className="mb-3 font-black text-white">Bet history</h2>
       <div className="space-y-2">
         {bets.length === 0 && <div className="rounded-md bg-white/[0.04] p-3 text-sm text-slate-400">No bets placed yet.</div>}
-        {bets.map((bet) => <div key={bet.id} className="rounded-md bg-white/[0.04] p-3 text-sm"><div className="flex items-center justify-between"><b>{bet.picks.length > 1 ? "Parlay" : "Single"} - {currency.format(bet.stake)}</b><span className={clsx("rounded px-2 py-1 text-xs", bet.status === "won" ? "bg-emerald-400/20 text-emerald-200" : bet.status === "lost" ? "bg-red-400/20 text-red-200" : "bg-amber-300/20 text-amber-100")}>{bet.status}</span></div><div className="mt-1 text-xs text-slate-400">{bet.picks.map((pick) => pick.label).join(" + ")}</div><div className="mt-2 flex items-center justify-between text-xs"><span>To win {currency.format(bet.potentialWin)}</span>{bet.status === "open" && <button onClick={() => settleBet(bet.id)} className="rounded bg-emerald-400 px-2 py-1 font-bold text-black">Settle</button>}</div></div>)}
+        {bets.map((bet) => {
+          const offer = cashOutValue(bet);
+          return (
+            <div key={bet.id} className="rounded-md bg-white/[0.04] p-3 text-sm">
+              <div className="flex items-center justify-between gap-2">
+                <b>{bet.picks.length > 1 ? "Parlay" : "Single"} - {currency.format(bet.stake)}</b>
+                <span className={clsx("rounded px-2 py-1 text-xs", bet.status === "won" ? "bg-emerald-400/20 text-emerald-200" : bet.status === "lost" ? "bg-red-400/20 text-red-200" : bet.status === "cashed_out" ? "bg-sky-400/20 text-sky-200" : "bg-amber-300/20 text-amber-100")}>{bet.status.replace("_", " ")}</span>
+              </div>
+              <div className="mt-1 text-xs text-slate-400">{bet.picks.map((pick) => `${pick.label} @ ${compact.format(pick.odds)}`).join(" + ")}</div>
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <span>{bet.status === "cashed_out" ? `Cashed out ${currency.format(bet.cashOut ?? 0)}` : `To win ${currency.format(bet.potentialWin)}`}</span>
+                {bet.status === "open" && (
+                  <div className="flex gap-2">
+                    {offer && <button onClick={() => cashOutBet(bet.id)} className="rounded bg-sky-300 px-2 py-1 font-black text-black">Cash out {currency.format(offer)}</button>}
+                    <button onClick={() => settleBet(bet.id)} className="rounded bg-emerald-400 px-2 py-1 font-bold text-black">Settle</button>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
