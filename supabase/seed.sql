@@ -1,0 +1,2 @@
+-- No match rows are seeded.
+-- Sports fixtures and odds are fetched from ESPN public scoreboards at runtime.
