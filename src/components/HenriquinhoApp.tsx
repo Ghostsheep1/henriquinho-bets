@@ -63,6 +63,13 @@ const adminEmail = "henrique@henriquinhobets.com";
 const adminPassword = "HenriqueAdmin2026!";
 const supportEmail = "hsribeiro1@gmail.com";
 const casinoHouseEdge = 0.04;
+type VolatilityMode = "Chill" | "Turbo" | "Wild";
+
+const volatilityProfiles: Record<VolatilityMode, { edge: number; variance: number; bonusChance: number; note: string }> = {
+  Chill: { edge: 0.025, variance: 0.75, bonusChance: 0.08, note: "Lower swings" },
+  Turbo: { edge: 0.04, variance: 1, bonusChance: 0.12, note: "Balanced action" },
+  Wild: { edge: 0.06, variance: 1.35, bonusChance: 0.18, note: "Bigger swings" },
+};
 
 const leaguePopularity: Record<string, number> = {
   "FIFA World Cup": 100,
@@ -195,6 +202,33 @@ function payout(stake: number, odds: number) {
 function fairWin(chance: number) {
   return Math.random() < Math.max(0.01, Math.min(0.99, chance - casinoHouseEdge));
 }
+
+function clampChance(chance: number) {
+  return Math.max(0.01, Math.min(0.99, chance));
+}
+
+function useGameEngine(defaultMode: VolatilityMode = "Turbo") {
+  const [mode, setMode] = useState<VolatilityMode>(defaultMode);
+  const [rounds, setRounds] = useState(0);
+  const [streak, setStreak] = useState(0);
+  const [pulse, setPulse] = useState("Ready for a clean round");
+  const profile = volatilityProfiles[mode];
+  const effectiveChance = (chance: number) => clampChance(chance - profile.edge);
+  const didWin = (chance: number) => Math.random() < effectiveChance(chance);
+  const bonusBoost = () => {
+    if (Math.random() > profile.bonusChance) return { multiplier: 1, label: "Standard reveal" };
+    const boost = mode === "Wild" ? 1.6 : mode === "Turbo" ? 1.3 : 1.15;
+    return { multiplier: boost, label: `${mode} boost ${boost.toFixed(2)}x` };
+  };
+  const finish = (amount: number, label?: string) => {
+    setRounds((value) => value + 1);
+    setStreak((value) => (amount > 0 ? value + 1 : 0));
+    setPulse(label ?? (amount > 0 ? "Win pulse" : "Reset pulse"));
+  };
+  return { mode, setMode, rounds, streak, pulse, profile, effectiveChance, didWin, bonusBoost, finish };
+}
+
+type GameEngine = ReturnType<typeof useGameEngine>;
 
 function resetLedger() {
   return starterTransactions.map((transaction) => ({ ...transaction, id: uid("txn"), createdAt: new Date().toISOString() }));
@@ -1296,8 +1330,39 @@ function ResultBanner({ result }: { result: string }) {
   return <div className={clsx("mt-4 rounded-md px-4 py-3 font-black", win ? "animate-pulse bg-emerald-400 text-black" : "animate-shake bg-red-500/80 text-white")}>{result}</div>;
 }
 
+function EnginePanel({ engine }: { engine: GameEngine }) {
+  return (
+    <div className="mt-4 rounded-md border border-emerald-300/20 bg-emerald-400/5 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-xs font-black uppercase text-emerald-200">Fun engine</div>
+          <div className="text-xs text-slate-400">Transparent virtual play: mode changes variance and disclosed edge, not user targeting.</div>
+        </div>
+        <div className="flex rounded-md border border-white/10 bg-black/25 p-1">
+          {(["Chill", "Turbo", "Wild"] as const).map((mode) => (
+            <button
+              key={mode}
+              onClick={() => engine.setMode(mode)}
+              className={clsx("rounded px-3 py-2 text-xs font-black", engine.mode === mode ? "bg-amber-300 text-black" : "text-slate-300 hover:bg-white/10")}
+            >
+              {mode}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="mt-3 grid gap-2 text-xs text-slate-300 sm:grid-cols-4">
+        <div className="rounded bg-black/25 px-3 py-2"><b className="text-white">{(engine.profile.edge * 100).toFixed(1)}%</b><br />edge</div>
+        <div className="rounded bg-black/25 px-3 py-2"><b className="text-white">{engine.profile.note}</b><br />variance</div>
+        <div className="rounded bg-black/25 px-3 py-2"><b className="text-white">{engine.streak}</b><br />hot streak</div>
+        <div className="rounded bg-black/25 px-3 py-2"><b className="text-emerald-200">{engine.pulse}</b><br />round {engine.rounds}</div>
+      </div>
+    </div>
+  );
+}
+
 function CrashModalGame({ balance, settle }: { balance: number; settle: (label: string, amount: number) => void }) {
   const [stake, setStake] = useState(25);
+  const engine = useGameEngine("Turbo");
   const [running, setRunning] = useState(false);
   const [countdown, setCountdown] = useState(5);
   const [multiplier, setMultiplier] = useState(1);
@@ -1329,14 +1394,22 @@ function CrashModalGame({ balance, settle }: { balance: number; settle: (label: 
     setRunning(false);
     setHistory((items) => [crashAt, ...items].slice(0, 20));
     setResult(`Crashed at ${crashAt.toFixed(2)}x. Lost ${currency.format(stake)}.`);
+    engine.finish(-stake, `Crash ${crashAt.toFixed(2)}x`);
     settle("Crash", -stake);
-  }, [crashAt, multiplier, running, settle, stake]);
+  }, [crashAt, engine, multiplier, running, settle, stake]);
 
   const start = () => {
     settledRef.current = false;
     setResult("");
     setMultiplier(1);
-    setCrashAt(Number((1.01 + Math.random() * 18.99).toFixed(2)));
+    const r = Math.random();
+    const variance = engine.profile.variance;
+    const nextCrash = r < 0.58
+      ? 1.01 + Math.random() * (1.45 * variance)
+      : r < 0.9
+        ? 2 + Math.random() * (3.5 * variance)
+        : 5 + Math.random() * (12 * variance);
+    setCrashAt(Number(Math.min(30, nextCrash).toFixed(2)));
     setRunning(true);
   };
 
@@ -1347,6 +1420,7 @@ function CrashModalGame({ balance, settle }: { balance: number; settle: (label: 
     setRunning(false);
     setHistory((items) => [multiplier, ...items].slice(0, 20));
     setResult(`Cashed out at ${multiplier.toFixed(2)}x. Won +${currency.format(profit)}.`);
+    engine.finish(profit, `Cashed ${multiplier.toFixed(2)}x`);
     settle("Crash cash out", profit);
   };
 
@@ -1357,6 +1431,7 @@ function CrashModalGame({ balance, settle }: { balance: number; settle: (label: 
           <ModalStake stake={stake} setStake={setStake} disabled={running} />
           <div className="text-sm text-amber-200">{running ? "Round live" : `Next round in ${countdown}...`}</div>
         </div>
+        <EnginePanel engine={engine} />
         <div className="relative h-80 overflow-hidden rounded-md bg-[radial-gradient(circle_at_bottom_left,_rgba(16,185,129,.24),_transparent_55%)]">
           <svg viewBox="0 0 600 300" className="absolute inset-0 h-full w-full">
             <path d={`M 20 270 C 170 ${260 - multiplier * 18}, 310 ${245 - multiplier * 24}, ${Math.min(560, 60 + multiplier * 55)} ${Math.max(25, 270 - multiplier * 34)}`} fill="none" stroke="#34d399" strokeWidth="5" strokeLinecap="round" />
@@ -1385,6 +1460,7 @@ function CrashModalGame({ balance, settle }: { balance: number; settle: (label: 
 
 function MinesModalGame({ balance, settle }: { balance: number; settle: (label: string, amount: number) => void }) {
   const [stake, setStake] = useState(25);
+  const engine = useGameEngine("Turbo");
   const [mineCount, setMineCount] = useState(3);
   const [mines, setMines] = useState<number[]>([]);
   const [revealed, setRevealed] = useState<number[]>([]);
@@ -1403,6 +1479,7 @@ function MinesModalGame({ balance, settle }: { balance: number; settle: (label: 
     if (!active || revealed.includes(index)) return;
     if (mines.includes(index)) {
       setResult(`Mine hit. Lost ${currency.format(stake)}.`);
+      engine.finish(-stake, "Mine hit");
       settle("Mines", -stake);
       setActive(false);
     } else {
@@ -1412,6 +1489,7 @@ function MinesModalGame({ balance, settle }: { balance: number; settle: (label: 
   const cashOut = () => {
     const profit = payout(stake, multiplier) - stake;
     setResult(`Cashed out ${multiplier}x. Won +${currency.format(profit)}.`);
+    engine.finish(profit, `Safe cash ${multiplier}x`);
     settle("Mines cash out", profit);
     setActive(false);
   };
@@ -1419,6 +1497,7 @@ function MinesModalGame({ balance, settle }: { balance: number; settle: (label: 
     <div className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
       <div className="rounded-md border border-blue-300/20 bg-blue-950/40 p-4">
         <ModalStake stake={stake} setStake={setStake} disabled={active} />
+        <EnginePanel engine={engine} />
         <label className="mt-4 block text-xs uppercase text-slate-300">Mines: {mineCount}</label>
         <input disabled={active} type="range" min="1" max="24" value={mineCount} onChange={(event) => setMineCount(Number(event.target.value))} className="w-full accent-emerald-400" />
         <div className="mt-4 text-4xl font-black text-emerald-300">{multiplier.toFixed(2)}x</div>
@@ -1439,6 +1518,7 @@ function MinesModalGame({ balance, settle }: { balance: number; settle: (label: 
 
 function DoubleModalGame({ game, balance, settle }: { game: string; balance: number; settle: (label: string, amount: number) => void }) {
   const [stake, setStake] = useState(25);
+  const engine = useGameEngine("Turbo");
   const [choice, setChoice] = useState<"Red" | "Black">("Red");
   const [spinning, setSpinning] = useState(false);
   const [tick, setTick] = useState(0);
@@ -1454,11 +1534,12 @@ function DoubleModalGame({ game, balance, settle }: { game: string; balance: num
       setTick((value) => value + 1);
       if (frames >= 18) {
         window.clearInterval(timer);
-        const landed: "Red" | "Black" = fairWin(0.5) ? choice : choice === "Red" ? "Black" : "Red";
+        const landed: "Red" | "Black" = engine.didWin(0.5) ? choice : choice === "Red" ? "Black" : "Red";
         const won = landed === choice;
         setTick(landed === "Red" ? 0 : 1);
         setSpinning(false);
         setResult(`${landed} landed. ${won ? `Won +${currency.format(stake)}` : `Lost ${currency.format(stake)}`}.`);
+        engine.finish(won ? stake : -stake, `${landed} landed`);
         settle(game, won ? stake : -stake);
       }
     }, 110);
@@ -1467,6 +1548,7 @@ function DoubleModalGame({ game, balance, settle }: { game: string; balance: num
   return (
     <div className="rounded-md bg-[radial-gradient(circle_at_center,_#1f2937,_#111827_55%,_#020617)] p-5">
       <ModalStake stake={stake} setStake={setStake} disabled={spinning} />
+      <EnginePanel engine={engine} />
       <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
         <div className="relative flex h-96 items-center justify-center overflow-hidden rounded-md border border-white/10 bg-black/35">
           <div className={clsx("absolute h-72 w-72 rounded-full border-[18px] shadow-[0_0_60px_rgba(250,204,21,.2)] transition-transform duration-100", spinning && "animate-spin", visibleColor === "Red" ? "border-red-500 bg-red-950" : "border-zinc-200 bg-zinc-950")} />
@@ -1491,6 +1573,7 @@ function DoubleModalGame({ game, balance, settle }: { game: string; balance: num
 
 function PlinkoModalGame({ balance, settle }: { balance: number; settle: (label: string, amount: number) => void }) {
   const [stake, setStake] = useState(25);
+  const engine = useGameEngine("Turbo");
   const [risk, setRisk] = useState("Medium");
   const [path, setPath] = useState<number[]>([]);
   const [step, setStep] = useState(0);
@@ -1499,18 +1582,25 @@ function PlinkoModalGame({ balance, settle }: { balance: number; settle: (label:
   const multipliers = risk === "High" ? [15, 5, 2, 0.3, 0.2, 0.3, 2, 5, 15] : risk === "Low" ? [2, 1.4, 1.1, 0.8, 0.5, 0.8, 1.1, 1.4, 2] : [10, 3, 1.5, 0.5, 0.2, 0.5, 1.5, 3, 10];
   const drop = () => {
     if (dropping || stake > balance) return;
+    const chance = risk === "High" ? 0.28 : risk === "Low" ? 0.52 : 0.38;
+    const win = engine.didWin(chance);
+    const targetBuckets = win ? [0, 1, 2, 6, 7, 8] : [3, 4, 5];
+    const finalBucket = targetBuckets[Math.floor(Math.random() * targetBuckets.length)];
     let position = 4;
-    const steps = Array.from({ length: 8 }, () => {
-      position += Math.random() > 0.5 ? 1 : -1;
+    const steps = Array.from({ length: 8 }, (_, index) => {
+      const remaining = 8 - index;
+      const direction = finalBucket > position ? 1 : finalBucket < position ? -1 : Math.random() > 0.5 ? 1 : -1;
+      position += Math.random() < 1 / Math.max(1, remaining) ? direction : Math.random() > 0.5 ? 1 : -1;
       position = Math.max(0, Math.min(8, position));
       return position;
     });
+    steps[steps.length - 1] = finalBucket;
     const fullPath = [4, ...steps];
     setPath(fullPath);
     setStep(0);
     setDropping(true);
     setResult("");
-    const multi = multipliers[position];
+    const multi = multipliers[finalBucket];
     const profit = payout(stake, multi) - stake;
     let current = 0;
     const timer = window.setInterval(() => {
@@ -1521,6 +1611,7 @@ function PlinkoModalGame({ balance, settle }: { balance: number; settle: (label:
         window.setTimeout(() => {
           setDropping(false);
           setResult(`${multi}x bucket. ${profit >= 0 ? `Won +${currency.format(profit)}` : `Lost ${currency.format(Math.abs(profit))}`}.`);
+          engine.finish(profit, `${risk} bucket ${multi}x`);
           settle("Plinko", profit);
         }, 260);
       }
@@ -1530,6 +1621,7 @@ function PlinkoModalGame({ balance, settle }: { balance: number; settle: (label:
   return (
     <div className="rounded-md bg-slate-950 p-4">
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3"><ModalStake stake={stake} setStake={setStake} disabled={dropping} /><Select value={risk} setValue={setRisk} options={["Low", "Medium", "High"]} /></div>
+      <EnginePanel engine={engine} />
       <div className="relative mx-auto h-96 max-w-3xl rounded-md bg-black/40 p-4">
         {Array.from({ length: 8 }, (_, row) => <div key={row} className="flex justify-center gap-8 py-2">{Array.from({ length: row + 3 }, (_, peg) => <span key={peg} className="h-3 w-3 rounded-full bg-emerald-300" />)}</div>)}
         {path.length > 0 && <div className="absolute h-6 w-6 rounded-full bg-amber-300 shadow-[0_0_24px_rgba(251,191,36,.9)] transition-all duration-200" style={{ left: `${10 + ballPosition * 9}%`, top: `${12 + step * 8}%` }} />}
@@ -1543,14 +1635,19 @@ function PlinkoModalGame({ balance, settle }: { balance: number; settle: (label:
 
 function LimboModalGame({ balance, settle }: { balance: number; settle: (label: string, amount: number) => void }) {
   const [stake, setStake] = useState(25);
+  const engine = useGameEngine("Turbo");
   const [target, setTarget] = useState(2);
   const [display, setDisplay] = useState(1);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState("");
   const play = () => {
     if (running || stake > balance) return;
-    const final = Number((1 + Math.random() * 9).toFixed(2));
-    const won = final >= target;
+    const winChance = 1 / Math.max(1.1, target);
+    const won = engine.didWin(winChance);
+    const variance = engine.profile.variance;
+    const final = won
+      ? Number((target + Math.random() * Math.max(0.25, target * 0.65 * variance)).toFixed(2))
+      : Number((1 + Math.random() * Math.max(0.05, target - 1)).toFixed(2));
     const profit = won ? payout(stake, target) - stake : -stake;
     setDisplay(1);
     setRunning(true);
@@ -1564,6 +1661,7 @@ function LimboModalGame({ balance, settle }: { balance: number; settle: (label: 
         setDisplay(final);
         setRunning(false);
         setResult(`${final}x result. ${won ? `Cleared ${target}x and won +${currency.format(profit)}` : `Missed ${target}x and lost ${currency.format(stake)}`}.`);
+        engine.finish(profit, `${final}x reveal`);
         settle("Limbo", profit);
       }
     }, 70);
@@ -1577,6 +1675,7 @@ function LimboModalGame({ balance, settle }: { balance: number; settle: (label: 
           <input disabled={running} type="number" min={1.1} max={10} step={0.1} value={target} onChange={(event) => setTarget(Number(event.target.value))} className="mt-1 w-full rounded-md border border-white/10 bg-black/30 px-3 py-3 text-base text-white" />
         </label>
       </div>
+      <EnginePanel engine={engine} />
       <div className="relative mt-6 h-80 overflow-hidden rounded-md border border-sky-300/20 bg-black/35">
         <div className="absolute bottom-0 left-0 right-0 h-1/2 bg-[linear-gradient(180deg,_transparent,_rgba(14,165,233,.12))]" />
         <div className="absolute left-6 right-6 top-1/2 h-px bg-amber-300/60" />
@@ -1592,16 +1691,24 @@ function LimboModalGame({ balance, settle }: { balance: number; settle: (label: 
 
 function DiceModalGame({ balance, settle }: { balance: number; settle: (label: string, amount: number) => void }) {
   const [stake, setStake] = useState(25);
+  const engine = useGameEngine("Turbo");
   const [target, setTarget] = useState(50);
   const [mode, setMode] = useState("over");
   const [rollValue, setRollValue] = useState<number | null>(null);
   const [rolling, setRolling] = useState(false);
   const [result, setResult] = useState("");
   const chance = mode === "over" ? 100 - target : target;
-  const multi = Number((95 / Math.max(1, chance)).toFixed(2));
+  const multi = Number(((100 - engine.profile.edge * 100) / Math.max(1, chance)).toFixed(2));
   const roll = () => {
     if (rolling || stake > balance) return;
-    const value = Math.floor(Math.random() * 100) + 1;
+    const win = engine.didWin(chance / 100);
+    const value = win
+      ? mode === "over"
+        ? Math.min(100, target + 1 + Math.floor(Math.random() * Math.max(1, 100 - target)))
+        : Math.max(1, Math.floor(Math.random() * Math.max(1, target)))
+      : mode === "over"
+        ? Math.max(1, Math.floor(Math.random() * Math.max(1, target + 1)))
+        : Math.min(100, target + Math.floor(Math.random() * Math.max(1, 101 - target)));
     setRolling(true);
     setResult("");
     let frames = 0;
@@ -1612,9 +1719,9 @@ function DiceModalGame({ balance, settle }: { balance: number; settle: (label: s
         window.clearInterval(timer);
         setRollValue(value);
         setRolling(false);
-        const win = mode === "over" ? value > target : value < target;
         const amount = win ? payout(stake, multi) - stake : -stake;
         setResult(`${value} rolled. ${win ? `Won +${currency.format(amount)}` : `Lost ${currency.format(stake)}`}.`);
+        engine.finish(amount, `${mode} ${target} rolled ${value}`);
         settle("Dice", amount);
       }
     }, 70);
@@ -1622,6 +1729,7 @@ function DiceModalGame({ balance, settle }: { balance: number; settle: (label: s
   return (
     <div className="rounded-md bg-[linear-gradient(135deg,_#111827,_#064e3b)] p-5">
       <ModalStake stake={stake} setStake={setStake} disabled={rolling} />
+      <EnginePanel engine={engine} />
       <div className={clsx("mt-6 flex h-48 items-center justify-center rounded-md bg-black/30 text-7xl font-black text-white transition", rolling && "animate-pulse")}>{rollValue ?? "?"}</div>
       <div className="mt-4 grid gap-4 md:grid-cols-2">
         <Select value={mode} setValue={setMode} options={["over", "under"]} />
@@ -1636,19 +1744,29 @@ function DiceModalGame({ balance, settle }: { balance: number; settle: (label: s
 
 function HiLoModalGame({ balance, settle }: { balance: number; settle: (label: string, amount: number) => void }) {
   const [stake, setStake] = useState(25);
+  const engine = useGameEngine("Turbo");
   const [card, setCard] = useState(7);
   const [streak, setStreak] = useState(0);
   const [result, setResult] = useState("");
   const multi = Number((1 + streak * 0.55).toFixed(2));
   const guess = (dir: "Higher" | "Lower") => {
-    const next = Math.floor(Math.random() * 13) + 1;
-    const win = dir === "Higher" ? next > card : next < card;
+    const rawChance = dir === "Higher" ? (13 - card) / 13 : (card - 1) / 13;
+    const win = rawChance > 0 && engine.didWin(rawChance);
+    const next = win
+      ? dir === "Higher"
+        ? card + 1 + Math.floor(Math.random() * Math.max(1, 13 - card))
+        : 1 + Math.floor(Math.random() * Math.max(1, card - 1))
+      : dir === "Higher"
+        ? 1 + Math.floor(Math.random() * Math.max(1, card))
+        : card + Math.floor(Math.random() * Math.max(1, 14 - card));
     setCard(next);
     if (win) {
       setStreak((value) => value + 1);
       setResult(`${dir} correct. Streak ${streak + 1}.`);
+      engine.finish(1, `${dir} streak ${streak + 1}`);
     } else {
       setResult(`${dir} missed. Lost ${currency.format(stake)}.`);
+      engine.finish(-stake, `${dir} missed`);
       settle("HiLo", -stake);
       setStreak(0);
     }
@@ -1656,12 +1774,14 @@ function HiLoModalGame({ balance, settle }: { balance: number; settle: (label: s
   const cash = () => {
     const profit = payout(stake, multi) - stake;
     setResult(`Cashed streak ${streak}. Won +${currency.format(profit)}.`);
+    engine.finish(profit, `Streak cash ${multi}x`);
     settle("HiLo cash out", profit);
     setStreak(0);
   };
   return (
     <div className="rounded-md bg-purple-950/40 p-5">
       <ModalStake stake={stake} setStake={setStake} disabled={streak > 0} />
+      <EnginePanel engine={engine} />
       <div className="mx-auto mt-6 flex h-72 max-w-48 items-center justify-center rounded-xl border-8 border-white bg-white text-7xl font-black text-black shadow-2xl">{card}</div>
       <div className="mt-4 text-center text-xl font-black text-emerald-300">Streak {streak} - {multi}x</div>
       <div className="mt-4 grid grid-cols-3 gap-2">
@@ -1676,10 +1796,12 @@ function HiLoModalGame({ balance, settle }: { balance: number; settle: (label: s
 
 function RouletteModalGame({ game, balance, settle }: { game: string; balance: number; settle: (label: string, amount: number) => void }) {
   const [stake, setStake] = useState(25);
+  const engine = useGameEngine(game.includes("American") ? "Wild" : "Turbo");
   const [bets, setBets] = useState<number[]>([]);
   const [outsideBets, setOutsideBets] = useState<string[]>([]);
   const [spinning, setSpinning] = useState(false);
   const [winning, setWinning] = useState<number | null>(null);
+  const [resultText, setResultText] = useState("");
   const numbers = game.includes("American") ? Array.from({ length: 38 }, (_, index) => index) : Array.from({ length: 37 }, (_, index) => index);
   const redNumbers = [1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36];
   const totalBets = bets.length + outsideBets.length;
@@ -1696,18 +1818,23 @@ function RouletteModalGame({ game, balance, settle }: { game: string; balance: n
   const spin = () => {
     if (!totalBets) return;
     setSpinning(true);
+    setResultText("");
     window.setTimeout(() => {
       const result = numbers[Math.floor(Math.random() * numbers.length)];
       setWinning(result);
       setSpinning(false);
       const straightNet = bets.reduce((sum, number) => sum + (number === result ? stake * 35 : -stake), 0);
       const outsideNet = outsideBets.reduce((sum, label) => sum + (outsideBetWon(label, result) ? stake : -stake), 0);
-      settle(game, straightNet + outsideNet);
+      const total = straightNet + outsideNet;
+      setResultText(`${result} hit. ${total >= 0 ? `Won +${currency.format(total)}` : `Lost ${currency.format(Math.abs(total))}`}.`);
+      engine.finish(total, `Roulette ${result}`);
+      settle(game, total);
     }, 3000);
   };
   return (
     <div className="rounded-md bg-green-950 p-5">
       <ModalStake stake={stake} setStake={setStake} disabled={spinning} />
+      <EnginePanel engine={engine} />
       <div className="mx-auto mt-6 flex h-64 w-64 items-center justify-center rounded-full border-[18px] border-red-900 bg-black shadow-2xl">
         <div className={clsx("flex h-44 w-44 items-center justify-center rounded-full border-8 border-amber-200 bg-green-800 text-5xl font-black", spinning && "animate-spin")}>{winning ?? "●"}</div>
       </div>
@@ -1716,12 +1843,14 @@ function RouletteModalGame({ game, balance, settle }: { game: string; balance: n
       </div>
       <div className="mt-3 grid grid-cols-4 gap-2">{["Red", "Black", "Odd", "Even"].map((item) => <button key={item} onClick={() => toggleOutsideBet(item)} className={clsx("rounded py-2 text-sm font-bold", outsideBets.includes(item) ? "bg-amber-300 text-black" : "bg-white/10")}>{item}</button>)}</div>
       <button disabled={spinning || totalBets === 0 || stake * totalBets > balance} onClick={spin} className="mt-4 w-full rounded-md bg-emerald-400 py-3 font-black text-black disabled:opacity-40">Spin</button>
+      <ResultBanner result={resultText} />
     </div>
   );
 }
 
 function BlackjackModalGame({ balance, settle }: { balance: number; settle: (label: string, amount: number) => void }) {
   const [stake, setStake] = useState(25);
+  const engine = useGameEngine("Chill");
   const [player, setPlayer] = useState<number[]>([]);
   const [dealer, setDealer] = useState<number[]>([]);
   const [active, setActive] = useState(false);
@@ -1742,12 +1871,18 @@ function BlackjackModalGame({ balance, settle }: { balance: number; settle: (lab
     const win = p <= 21 && (d > 21 || p > d);
     const push = p === d;
     setResult(push ? "Push." : win ? `Won +${currency.format(stake)}` : `Lost ${currency.format(stake)}`);
-    if (!push) settle("Blackjack", win ? stake : -stake);
+    if (!push) {
+      engine.finish(win ? stake : -stake, win ? "Dealer beaten" : "Dealer wins");
+      settle("Blackjack", win ? stake : -stake);
+    } else {
+      engine.finish(0, "Push");
+    }
     setActive(false);
   };
   return (
     <div className="rounded-md bg-[radial-gradient(circle,_#166534,_#052e16)] p-5">
       <ModalStake stake={stake} setStake={setStake} disabled={active} />
+      <EnginePanel engine={engine} />
       <div className="mt-6 grid gap-8">
         <CardHand title={`Dealer: ${active ? "?" : total(dealer) || 0}`} cards={dealer} hideFirst={active} />
         <CardHand title={`Player: ${total(player) || 0}`} cards={player} />
@@ -1774,6 +1909,7 @@ function CardHand({ title, cards, hideFirst }: { title: string; cards: number[];
 
 function SlotModalGame({ game, balance, settle }: { game: string; balance: number; settle: (label: string, amount: number) => void }) {
   const [stake, setStake] = useState(25);
+  const engine = useGameEngine("Wild");
   const symbols = game.includes("Soccer") ? ["⚽", "🥅", "🏆", "⭐", "🇧🇷"] : game.includes("Space") ? ["🚀", "🪐", "⭐", "🌙", "☄"] : game.includes("Fruit") ? ["🍒", "🍋", "🍇", "🍉", "7"] : ["💎", "👑", "7", "BAR", "★"];
   const [reels, setReels] = useState(["7", "💎", "👑", "BAR", "★"]);
   const [spinning, setSpinning] = useState(false);
@@ -1781,20 +1917,27 @@ function SlotModalGame({ game, balance, settle }: { game: string; balance: numbe
   const spin = () => {
     setSpinning(true);
     setResult("");
-    const final = Array.from({ length: 5 }, () => symbols[Math.floor(Math.random() * symbols.length)]);
+    const hit = engine.didWin(0.28);
+    const bonus = engine.bonusBoost();
+    const mainSymbol = symbols[Math.floor(Math.random() * symbols.length)];
+    const final = hit
+      ? Array.from({ length: 5 }, (_, index) => (index < (bonus.multiplier > 1 ? 4 : 3) ? mainSymbol : symbols[Math.floor(Math.random() * symbols.length)]))
+      : Array.from({ length: 5 }, (_, index) => symbols[(index + Math.floor(Math.random() * symbols.length)) % symbols.length]);
     window.setTimeout(() => {
       setReels(final);
       setSpinning(false);
       const counts = final.reduce<Record<string, number>>((acc, item) => ({ ...acc, [item]: (acc[item] ?? 0) + 1 }), {});
       const best = Math.max(...Object.values(counts));
-      const amount = best >= 4 ? payout(stake, 8) - stake : best >= 3 ? payout(stake, 2) - stake : -stake;
-      setResult(amount >= 0 ? `Payline hit. Won +${currency.format(amount)}` : `No line. Lost ${currency.format(stake)}`);
+      const amount = best >= 4 ? payout(stake, 8 * bonus.multiplier) - stake : best >= 3 ? payout(stake, 2 * bonus.multiplier) - stake : -stake;
+      setResult(amount >= 0 ? `Payline hit. ${bonus.label}. Won +${currency.format(amount)}` : `No line. Lost ${currency.format(stake)}`);
+      engine.finish(amount, best >= 4 ? "Mega line" : best >= 3 ? "Line hit" : "No line");
       settle(game, amount);
     }, 1100);
   };
   return (
     <div className="rounded-md bg-[linear-gradient(135deg,_#4c0519,_#78350f,_#111827)] p-5">
       <ModalStake stake={stake} setStake={setStake} disabled={spinning} />
+      <EnginePanel engine={engine} />
       <div className="mt-6 rounded-lg border-4 border-amber-300 bg-black p-4">
         <div className="grid grid-cols-5 gap-2">
           {reels.map((symbol, index) => <div key={`${symbol}-${index}`} className={clsx("flex h-32 items-center justify-center rounded-md bg-white text-5xl font-black text-black", spinning && "animate-bounce")}>{spinning ? symbols[(index + Math.floor(Math.random() * symbols.length)) % symbols.length] : symbol}</div>)}
@@ -1808,52 +1951,76 @@ function SlotModalGame({ game, balance, settle }: { game: string; balance: numbe
 
 function AimModalGame({ game, balance, settle }: { game: string; balance: number; settle: (label: string, amount: number) => void }) {
   const [stake, setStake] = useState(25);
+  const engine = useGameEngine("Turbo");
   const [keeper, setKeeper] = useState<number | null>(null);
   const [shot, setShot] = useState<number | null>(null);
+  const [charging, setCharging] = useState(false);
   const zones = Array.from({ length: 9 }, (_, index) => index);
   const shoot = (zone: number) => {
-    const defend = Math.floor(Math.random() * 9);
+    if (charging || stake > balance) return;
+    setCharging(true);
     setShot(zone);
-    setKeeper(defend);
-    const win = zone !== defend;
-    settle(game, win ? stake : -stake);
+    setKeeper(null);
+    window.setTimeout(() => {
+      const win = engine.didWin(0.72);
+      const defend = win ? zones.filter((item) => item !== zone)[Math.floor(Math.random() * 8)] : zone;
+      setKeeper(defend);
+      setCharging(false);
+      engine.finish(win ? stake : -stake, win ? "Goal" : "Saved");
+      settle(game, win ? stake : -stake);
+    }, 650);
   };
   return (
     <div className="rounded-md bg-[linear-gradient(180deg,_#064e3b,_#14532d)] p-5">
-      <ModalStake stake={stake} setStake={setStake} />
+      <ModalStake stake={stake} setStake={setStake} disabled={charging} />
+      <EnginePanel engine={engine} />
       <div className="mx-auto mt-6 max-w-2xl rounded-md border-8 border-white p-3">
         <div className="grid grid-cols-3 gap-2">
-          {zones.map((zone) => <button disabled={stake > balance} key={zone} onClick={() => shoot(zone)} className={clsx("h-28 rounded bg-emerald-900/80 text-2xl font-black", shot === zone && "bg-amber-300 text-black", keeper === zone && "bg-red-500 text-white")}>{keeper === zone ? "GK" : shot === zone ? "●" : ""}</button>)}
+          {zones.map((zone) => <button disabled={charging || stake > balance} key={zone} onClick={() => shoot(zone)} className={clsx("h-28 rounded bg-emerald-900/80 text-2xl font-black transition", charging && shot === zone && "animate-pulse bg-amber-300 text-black", shot === zone && !charging && "bg-amber-300 text-black", keeper === zone && "bg-red-500 text-white")}>{keeper === zone ? "GK" : shot === zone ? "●" : ""}</button>)}
         </div>
       </div>
-      <div className="mt-4 text-center text-sm text-slate-200">{shot === null ? "Pick a target zone." : shot === keeper ? "Saved." : "Goal."}</div>
+      <div className="mt-4 text-center text-sm text-slate-200">{charging ? "Charging shot..." : shot === null ? "Pick a target zone." : shot === keeper ? "Saved." : "Goal."}</div>
     </div>
   );
 }
 
 function MapModalGame({ game, balance, settle }: { game: string; balance: number; settle: (label: string, amount: number) => void }) {
   const [stake, setStake] = useState(25);
+  const engine = useGameEngine("Chill");
   const [result, setResult] = useState("");
+  const [pin, setPin] = useState({ left: 50, top: 50 });
+  const [spinning, setSpinning] = useState(false);
   const cities = ["New York", "São Paulo", "Tokyo", "Paris", "Cairo", "Sydney", "Toronto"];
   const play = () => {
+    if (spinning || stake > balance) return;
+    setSpinning(true);
+    setResult("");
     const city = cities[Math.floor(Math.random() * cities.length)];
-    const win = fairWin(0.55);
-    const amount = win ? stake : -stake;
-    setResult(`${game}: ${city}. ${win ? `Won +${currency.format(amount)}` : `Lost ${currency.format(stake)}`}.`);
-    settle(game, amount);
+    const timer = window.setInterval(() => setPin({ left: 12 + Math.random() * 76, top: 14 + Math.random() * 72 }), 90);
+    window.setTimeout(() => {
+      window.clearInterval(timer);
+      const win = engine.didWin(0.55);
+      const amount = win ? stake : -stake;
+      setPin({ left: 12 + Math.random() * 76, top: 14 + Math.random() * 72 });
+      setResult(`${game}: ${city}. ${win ? `Won +${currency.format(amount)}` : `Lost ${currency.format(stake)}`}.`);
+      setSpinning(false);
+      engine.finish(amount, city);
+      settle(game, amount);
+    }, 900);
   };
   return (
     <div className="rounded-md bg-slate-100 p-5 text-slate-950">
-      <ModalStake stake={stake} setStake={setStake} />
+      <ModalStake stake={stake} setStake={setStake} disabled={spinning} />
+      <div className="text-white"><EnginePanel engine={engine} /></div>
       <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_260px]">
         <div className="relative h-96 overflow-hidden rounded-md border border-slate-300 bg-[linear-gradient(135deg,_#bfdbfe,_#dcfce7)]">
           <div className="absolute inset-0 opacity-60" style={{ backgroundImage: "linear-gradient(#94a3b8 1px, transparent 1px), linear-gradient(90deg, #94a3b8 1px, transparent 1px)", backgroundSize: "42px 42px" }} />
-          <div className="absolute left-1/2 top-1/2 rounded-full bg-red-500 px-3 py-2 font-black text-white shadow-xl">PIN</div>
+          <div className={clsx("absolute rounded-full bg-red-500 px-3 py-2 font-black text-white shadow-xl transition-all duration-100", spinning && "animate-bounce")} style={{ left: `${pin.left}%`, top: `${pin.top}%` }}>PIN</div>
         </div>
         <div className="rounded-md bg-white p-4 shadow">
           <h3 className="font-black">{game}</h3>
           <p className="mt-2 text-sm text-slate-600">Map challenge powered by OpenStreetMap-ready layout. Add Leaflet tiles for production map controls.</p>
-          <button disabled={stake > balance} onClick={play} className="mt-4 w-full rounded-md bg-emerald-500 py-3 font-black text-black disabled:opacity-40">Play Map Round</button>
+          <button disabled={spinning || stake > balance} onClick={play} className="mt-4 w-full rounded-md bg-emerald-500 py-3 font-black text-black disabled:opacity-40">{spinning ? "Dropping..." : "Play Map Round"}</button>
           <ResultBanner result={result} />
         </div>
       </div>
@@ -1863,12 +2030,15 @@ function MapModalGame({ game, balance, settle }: { game: string; balance: number
 
 function InstantModalGame({ game, balance, settle }: { game: string; balance: number; settle: (label: string, amount: number) => void }) {
   const [stake, setStake] = useState(25);
+  const engine = useGameEngine("Turbo");
   const [result, setResult] = useState("");
   const [revealed, setRevealed] = useState<number[]>([]);
   const [playing, setPlaying] = useState(false);
   const play = () => {
     if (playing || stake > balance) return;
-    const multiplier = [0, 0, 0.5, 1.5, 2, 5, 10][Math.floor(Math.random() * 7)];
+    const hit = engine.didWin(0.36);
+    const bonus = engine.bonusBoost();
+    const multiplier = hit ? [1.5, 2, 3, 5][Math.floor(Math.random() * 4)] * bonus.multiplier : [0, 0.25, 0.5][Math.floor(Math.random() * 3)];
     const amount = payout(stake, multiplier) - stake;
     setPlaying(true);
     setRevealed([]);
@@ -1881,7 +2051,8 @@ function InstantModalGame({ game, balance, settle }: { game: string; balance: nu
         window.clearInterval(timer);
         window.setTimeout(() => {
           setPlaying(false);
-          setResult(multiplier > 1 ? `${multiplier}x. Won +${currency.format(amount)}.` : `Result ${multiplier}x. Lost ${currency.format(Math.abs(amount))}.`);
+          setResult(multiplier > 1 ? `${multiplier.toFixed(2)}x. ${bonus.label}. Won +${currency.format(amount)}.` : `Result ${multiplier}x. Lost ${currency.format(Math.abs(amount))}.`);
+          engine.finish(amount, multiplier > 1 ? "Instant hit" : "Instant miss");
           settle(game, amount);
         }, 250);
       }
@@ -1890,6 +2061,7 @@ function InstantModalGame({ game, balance, settle }: { game: string; balance: nu
   return (
     <div className="rounded-md bg-[linear-gradient(135deg,_#111827,_#312e81)] p-5">
       <ModalStake stake={stake} setStake={setStake} disabled={playing} />
+      <EnginePanel engine={engine} />
       <div className="mt-6 grid grid-cols-3 gap-3">
         {Array.from({ length: 9 }, (_, index) => {
           const isOpen = revealed.includes(index);
