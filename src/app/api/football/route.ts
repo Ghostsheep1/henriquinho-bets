@@ -9,6 +9,7 @@ const featuredTournaments = [
 ] as const;
 
 const stalePastWindowMs = 48 * 60 * 60 * 1000;
+const futureWindowDays = 4;
 
 type EspnEvent = {
   id: string;
@@ -18,6 +19,14 @@ type EspnEvent = {
     competitors?: Array<{ homeAway: "home" | "away"; score?: string; team: { displayName: string } }>;
   }>;
 };
+
+function dateKeys() {
+  return Array.from({ length: futureWindowDays + 1 }, (_, index) => {
+    const date = new Date();
+    date.setUTCDate(date.getUTCDate() + index);
+    return `${date.getUTCFullYear()}${String(date.getUTCMonth() + 1).padStart(2, "0")}${String(date.getUTCDate()).padStart(2, "0")}`;
+  });
+}
 
 function normalizeTournament(event: EspnEvent, tournament: (typeof featuredTournaments)[number]): Match | null {
   const competition = event.competitions?.[0];
@@ -47,10 +56,17 @@ export async function GET() {
   try {
     const results = await Promise.all(
       featuredTournaments.map(async (tournament) => {
-        const response = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${tournament.slug}/scoreboard`, { next: { revalidate: 60 } });
-        if (!response.ok) return [];
-        const payload = (await response.json()) as { events?: EspnEvent[] };
-        return (payload.events ?? []).map((event) => normalizeTournament(event, tournament)).filter(Boolean) as Match[];
+        const responses = await Promise.all(
+          dateKeys().map(async (date) => {
+            const response = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${tournament.slug}/scoreboard?dates=${date}`, { next: { revalidate: 60 } });
+            if (!response.ok) return [];
+            const payload = (await response.json()) as { events?: EspnEvent[] };
+            return payload.events ?? [];
+          }),
+        );
+        const byId = new Map<string, EspnEvent>();
+        responses.flat().forEach((event) => byId.set(event.id, event));
+        return Array.from(byId.values()).map((event) => normalizeTournament(event, tournament)).filter(Boolean) as Match[];
       }),
     );
     const tournaments = results.flat().sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());

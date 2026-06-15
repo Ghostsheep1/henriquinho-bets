@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import type { Match, SportKey } from "@/lib/types";
 
-const endpoints: Array<{ url: string; sport: SportKey; league: string; country: string }> = [
-  { url: "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard", sport: "soccer", league: "FIFA World Cup", country: "World" },
-  { url: "https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.euro/scoreboard", sport: "soccer", league: "UEFA Euro", country: "Europe" },
-  { url: "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.olympics/scoreboard", sport: "soccer", league: "Olympic Soccer", country: "World" },
-  { url: "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.wwc/scoreboard", sport: "soccer", league: "FIFA Women's World Cup", country: "World" },
+const endpoints: Array<{ url: string; sport: SportKey; league: string; country: string; dateWindow?: boolean }> = [
+  { url: "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard", sport: "soccer", league: "FIFA World Cup", country: "World", dateWindow: true },
+  { url: "https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.euro/scoreboard", sport: "soccer", league: "UEFA Euro", country: "Europe", dateWindow: true },
+  { url: "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.olympics/scoreboard", sport: "soccer", league: "Olympic Soccer", country: "World", dateWindow: true },
+  { url: "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.wwc/scoreboard", sport: "soccer", league: "FIFA Women's World Cup", country: "World", dateWindow: true },
   { url: "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard", sport: "nba", league: "NBA", country: "USA" },
   { url: "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard", sport: "nfl", league: "NFL", country: "USA" },
   { url: "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard", sport: "mlb", league: "MLB", country: "USA" },
@@ -27,6 +27,7 @@ const endpoints: Array<{ url: string; sport: SportKey; league: string; country: 
 ];
 
 const stalePastWindowMs = 48 * 60 * 60 * 1000;
+const futureWindowDays = 4;
 
 type EspnCompetition = {
   competitors: Array<{
@@ -71,6 +72,14 @@ function calculatedOdds(homeStrength: number, awayStrength: number, drawAllowed:
   };
 }
 
+function dateKeys() {
+  return Array.from({ length: futureWindowDays + 1 }, (_, index) => {
+    const date = new Date();
+    date.setUTCDate(date.getUTCDate() + index);
+    return `${date.getUTCFullYear()}${String(date.getUTCMonth() + 1).padStart(2, "0")}${String(date.getUTCDate()).padStart(2, "0")}`;
+  });
+}
+
 function normalizeEvent(event: EspnEvent, config: (typeof endpoints)[number]): Match | null {
   const competition = event.competitions?.[0];
   const competitors = competition?.competitors ?? [];
@@ -102,10 +111,18 @@ export async function GET() {
   try {
     const results = await Promise.all(
       endpoints.map(async (config) => {
-        const response = await fetch(config.url, { next: { revalidate: 60 } });
-        if (!response.ok) return [];
-        const payload = (await response.json()) as { events?: EspnEvent[] };
-        return (payload.events ?? []).map((event) => normalizeEvent(event, config)).filter(Boolean) as Match[];
+        const urls = config.dateWindow ? dateKeys().map((date) => `${config.url}?dates=${date}`) : [config.url];
+        const payloads = await Promise.all(
+          urls.map(async (url) => {
+            const response = await fetch(url, { next: { revalidate: 60 } });
+            if (!response.ok) return [];
+            const payload = (await response.json()) as { events?: EspnEvent[] };
+            return payload.events ?? [];
+          }),
+        );
+        const byId = new Map<string, EspnEvent>();
+        payloads.flat().forEach((event) => byId.set(event.id, event));
+        return Array.from(byId.values()).map((event) => normalizeEvent(event, config)).filter(Boolean) as Match[];
       }),
     );
     return NextResponse.json({ source: "espn-public", configured: true, matches: results.flat(), message: "ok" });

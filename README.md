@@ -1,12 +1,12 @@
 # HenriquinhoBets
 
-HenriquinhoBets is a sportsbook and casino interface built with Next.js 14 App Router, Tailwind CSS, Supabase-ready auth/data tables, no-key ESPN public sports feeds, and a full playable casino lobby.
+HenriquinhoBets is a sportsbook and casino interface built with Next.js 14 App Router, Tailwind CSS, Supabase-ready auth/data tables, no-key public sports feeds, and a full playable casino lobby.
 
 ## What is built
 
 - Supabase-ready registration/login profile flow with automatic 1,000 starting balance in SQL.
-- Sportsbook that only renders live/upcoming events returned by ESPN public scoreboards.
-- Featured FIFA World Cup 2026 section from ESPN soccer data.
+- Sportsbook that only renders live/upcoming events returned by public scoreboards.
+- Featured FIFA World Cup, Euro, Olympic, and Women's World Cup sections from public soccer data.
 - Real API empty states: if scoreboards are temporarily unavailable, the UI shows “Odds updating soon” instead of invented matches.
 - Moneyline, totals, handicap, multi-pick parlays, and settlement hook.
 - Casino section with flagship playable games plus a 100+ game categorized lobby.
@@ -36,7 +36,7 @@ SUPABASE_SERVICE_ROLE_KEY=your-service-role-key-for-server-jobs-only
 Free-tier sources:
 
 - Supabase: [https://supabase.com](https://supabase.com)
-- ESPN public scoreboards are used for local sports data and do not require an API key.
+- Public scoreboards are used for local sports data and do not require an API key.
 
 ## Supabase database
 
@@ -52,9 +52,9 @@ The schema creates `profiles`, `transactions`, `matches`, `bets`, and `game_roun
 
 ## API routes
 
-- `GET /api/odds`: fetches ESPN scoreboards and normalizes live/upcoming events into moneyline, totals, and handicap markets.
-- `GET /api/football`: fetches the FIFA World Cup 2026 ESPN scoreboard for the featured tournament panel.
-- `POST /api/settle`: placeholder settlement endpoint for a cron worker that compares open bets against final ESPN results.
+- `GET /api/odds`: fetches public scoreboards and normalizes live/upcoming events into moneyline, totals, and handicap markets.
+- `GET /api/football`: fetches featured soccer tournament scoreboards for the featured tournament panel.
+- `POST /api/settle`: placeholder settlement endpoint for a cron worker that compares open bets against final provider results.
 
 The routes cache for 60 seconds to protect free-tier quotas.
 

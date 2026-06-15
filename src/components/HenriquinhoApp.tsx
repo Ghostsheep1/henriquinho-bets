@@ -7,6 +7,7 @@ import {
   Gamepad2,
   Goal,
   Info,
+  Languages,
   LogIn,
   Menu,
   Sparkles,
@@ -54,7 +55,83 @@ const nav = [
   { id: "admin", label: "Admin", icon: BarChart3 },
 ];
 
-type AppUser = { name: string; email: string; guest?: boolean };
+type AppUser = { name: string; email: string; guest?: boolean; admin?: boolean };
+type Language = "en" | "pt" | "es";
+
+const adminEmail = "henrique@henriquinhobets.com";
+const adminPassword = "HenriqueAdmin2026!";
+
+const languageLabels: Record<Language, string> = { en: "English", pt: "Português", es: "Español" };
+
+const copy: Record<Language, Record<string, string>> = {
+  en: {
+    "nav.sports": "Sportsbook",
+    "nav.live": "In-play",
+    "nav.casino": "Casino",
+    "nav.wallet": "Wallet",
+    "nav.profile": "Profile",
+    "nav.admin": "Admin",
+    "login.title": "Enter HenriquinhoBets",
+    "login.subtitle": "Login, create a beta profile, or join as a guest to test live markets, wallet history, and the casino lobby.",
+    "login.submit": "Login / Create beta account",
+    "login.guest": "Join as guest",
+    "login.password": "Password",
+    "login.adminHint": "Admin preset: henrique@henriquinhobets.com / HenriqueAdmin2026!",
+    "hero.badge": "live odds, casino games, premium markets",
+    "hero.copy": "Sports betting, casino games, live markets, wallet history, leaderboard, and account analytics in one polished dark trading floor.",
+    "hero.odds": "Browse odds",
+    "hero.casino": "Play casino",
+    "common.balance": "Balance",
+    "common.deposit": "Deposit",
+    "market.empty": "Markets appear here as soon as official scoreboards return scheduled or live events.",
+  },
+  pt: {
+    "nav.sports": "Apostas",
+    "nav.live": "Ao vivo",
+    "nav.casino": "Cassino",
+    "nav.wallet": "Carteira",
+    "nav.profile": "Perfil",
+    "nav.admin": "Admin",
+    "login.title": "Entrar no HenriquinhoBets",
+    "login.subtitle": "Entre, crie um perfil beta ou jogue como convidado para testar mercados, carteira e cassino.",
+    "login.submit": "Entrar / Criar conta beta",
+    "login.guest": "Entrar como convidado",
+    "login.password": "Senha",
+    "login.adminHint": "Admin preset: henrique@henriquinhobets.com / HenriqueAdmin2026!",
+    "hero.badge": "odds ao vivo, cassino, mercados premium",
+    "hero.copy": "Apostas esportivas, cassino, mercados ao vivo, carteira, ranking e análises em uma plataforma escura e polida.",
+    "hero.odds": "Ver odds",
+    "hero.casino": "Jogar cassino",
+    "common.balance": "Saldo",
+    "common.deposit": "Depositar",
+    "market.empty": "Os mercados aparecem assim que placares oficiais retornam eventos agendados ou ao vivo.",
+  },
+  es: {
+    "nav.sports": "Apuestas",
+    "nav.live": "En vivo",
+    "nav.casino": "Casino",
+    "nav.wallet": "Billetera",
+    "nav.profile": "Perfil",
+    "nav.admin": "Admin",
+    "login.title": "Entrar a HenriquinhoBets",
+    "login.subtitle": "Inicia sesión, crea un perfil beta o entra como invitado para probar mercados, billetera y casino.",
+    "login.submit": "Entrar / Crear cuenta beta",
+    "login.guest": "Entrar como invitado",
+    "login.password": "Contraseña",
+    "login.adminHint": "Admin preset: henrique@henriquinhobets.com / HenriqueAdmin2026!",
+    "hero.badge": "cuotas en vivo, casino, mercados premium",
+    "hero.copy": "Apuestas deportivas, casino, mercados en vivo, billetera, ranking y análisis en una plataforma oscura y pulida.",
+    "hero.odds": "Ver cuotas",
+    "hero.casino": "Jugar casino",
+    "common.balance": "Saldo",
+    "common.deposit": "Depositar",
+    "market.empty": "Los mercados aparecen cuando marcadores oficiales devuelven eventos programados o en vivo.",
+  },
+};
+
+function t(language: Language, key: string) {
+  return copy[language][key] ?? copy.en[key] ?? key;
+}
 
 type SportsPayload = {
   configured: boolean;
@@ -92,6 +169,11 @@ function payout(stake: number, odds: number) {
 
 function resetLedger() {
   return starterTransactions.map((transaction) => ({ ...transaction, id: uid("txn"), createdAt: new Date().toISOString() }));
+}
+
+function matchKey(match: Match) {
+  const date = Number.isFinite(new Date(match.startsAt).getTime()) ? new Date(match.startsAt).toISOString().slice(0, 10) : match.startsAt;
+  return `${match.sport}:${match.league}:${match.home}:${match.away}:${date}`.toLowerCase();
 }
 
 function isFreshMarket(match: Match) {
@@ -171,8 +253,9 @@ function useLiveSports() {
         const byId = new Map<string, Match>();
 
         for (const match of [...(football.matches ?? []), ...(odds.matches ?? [])]) {
-          const existing = byId.get(match.id);
-          byId.set(match.id, existing ? { ...existing, ...match, odds: match.odds ?? existing.odds } : match);
+          const key = matchKey(match);
+          const existing = byId.get(key);
+          byId.set(key, existing ? { ...existing, ...match, odds: match.odds ?? existing.odds } : match);
         }
 
         const freshMatches = Array.from(byId.values())
@@ -213,6 +296,8 @@ export default function HenriquinhoApp() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [user, setUser] = useState<AppUser | null>(null);
   const [hasEntered, setHasEntered] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+  const [language, setLanguage] = useState<Language>("en");
   const [balance, setBalance] = useState(1000);
   const [transactions, setTransactions] = useState<Transaction[]>(starterTransactions);
   const [bets, setBets] = useState<Bet[]>([]);
@@ -226,27 +311,40 @@ export default function HenriquinhoApp() {
 
   useEffect(() => {
     const raw = localStorage.getItem("henriquinho-state-v2");
-    if (!raw) return;
-    const parsed = JSON.parse(raw) as {
-      user: AppUser | null;
-      balance: number;
-      transactions: Transaction[];
-      bets: Bet[];
-      lastBonus: string | null;
-    };
-    setUser(parsed.user);
-    setBalance(parsed.balance);
-    setTransactions((parsed.transactions ?? starterTransactions).map((transaction) => ({
-      ...transaction,
-      balanceAfter: transaction.balanceAfter ?? parsed.balance ?? 1000,
-    })));
-    setBets(parsed.bets);
-    setLastBonus(parsed.lastBonus);
+    if (raw) {
+      const parsed = JSON.parse(raw) as {
+        user: AppUser | null;
+        balance: number;
+        transactions: Transaction[];
+        bets: Bet[];
+        lastBonus: string | null;
+        hasEntered?: boolean;
+        language?: Language;
+      };
+      setUser(parsed.user);
+      setHasEntered(Boolean(parsed.hasEntered && parsed.user));
+      if (parsed.language) setLanguage(parsed.language);
+      setBalance(parsed.balance);
+      setTransactions((parsed.transactions ?? starterTransactions).map((transaction) => ({
+        ...transaction,
+        balanceAfter: transaction.balanceAfter ?? parsed.balance ?? 1000,
+      })));
+      setBets(parsed.bets ?? []);
+      setLastBonus(parsed.lastBonus);
+    }
+    setHydrated(true);
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("henriquinho-state-v2", JSON.stringify({ user, balance, transactions, bets, lastBonus }));
-  }, [user, balance, transactions, bets, lastBonus]);
+    if (!hydrated) return;
+    localStorage.setItem("henriquinho-state-v2", JSON.stringify({ user, balance, transactions, bets, lastBonus, hasEntered, language }));
+  }, [user, balance, transactions, bets, lastBonus, hasEntered, language, hydrated]);
+
+  const isAdmin = Boolean(user?.admin);
+
+  useEffect(() => {
+    if (active === "admin" && !isAdmin) setActive("sports");
+  }, [active, isAdmin]);
 
   const addTransaction = (type: Transaction["type"], amount: number, label: string) => {
     setBalance((current) => {
@@ -311,6 +409,13 @@ export default function HenriquinhoApp() {
     addTransaction("deposit", amount, `Deposit ${uid("HB").toUpperCase()}`);
   };
 
+  const signOut = () => {
+    setUser(null);
+    setHasEntered(false);
+    setSlip([]);
+    setActive("sports");
+  };
+
   const enterBeta = (profile: AppUser) => {
     setUser(profile);
     setBalance(1000);
@@ -326,29 +431,29 @@ export default function HenriquinhoApp() {
   const lossCount = bets.filter((bet) => bet.status === "lost").length;
 
   if (!hasEntered) {
-    return <LoginGate onEnter={enterBeta} />;
+    return <LoginGate language={language} setLanguage={setLanguage} onEnter={enterBeta} />;
   }
 
   return (
     <div className="min-h-screen bg-[#070a0c] text-slate-100">
       <div className="fixed inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,_rgba(12,159,89,0.22),_transparent_34%),linear-gradient(135deg,_#070a0c_0%,_#0d1712_45%,_#141006_100%)]" />
       <LiveTicker matches={matches} message={message} />
-      <Header user={user} balance={balance} soundOn={soundOn} setSoundOn={setSoundOn} onMenu={() => setMenuOpen(true)} onDeposit={() => setDepositOpen(true)} />
+      <Header user={user} balance={balance} soundOn={soundOn} setSoundOn={setSoundOn} onMenu={() => setMenuOpen(true)} onDeposit={() => setDepositOpen(true)} onSignOut={signOut} language={language} setLanguage={setLanguage} />
       <div className="mx-auto flex max-w-[1540px] gap-4 px-3 pb-8 pt-3 sm:px-5">
-        <Sidebar active={active} setActive={setActive} open={menuOpen} setOpen={setMenuOpen} />
+        <Sidebar active={active} setActive={setActive} open={menuOpen} setOpen={setMenuOpen} language={language} isAdmin={isAdmin} />
         <main className="min-w-0 flex-1 space-y-4">
-          <Hero setActive={setActive} />
+          <Hero setActive={setActive} language={language} />
           {active === "sports" && <Sportsbook matches={matches} worldCup={worldCup} loading={loading} message={message} slip={slip} setSlip={setSlip} />}
           {active === "live" && <Sportsbook liveOnly matches={matches} worldCup={worldCup} loading={loading} message={message} slip={slip} setSlip={setSlip} />}
           {active === "casino" && <Casino balance={balance} soundOn={soundOn} onResult={casinoResult} />}
           {active === "wallet" && <WalletView balance={balance} claimBonus={claimBonus} transactions={transactions} onDeposit={() => setDepositOpen(true)} />}
           {active === "profile" && <ProfileView user={user} setUser={setUser} balance={balance} bets={bets} winCount={winCount} lossCount={lossCount} />}
-          {active === "admin" && <AdminView bets={bets} transactions={transactions} />}
+          {active === "admin" && isAdmin && <AdminView bets={bets} transactions={transactions} />}
         </main>
         <aside className="hidden w-80 shrink-0 space-y-4 xl:block">
           <BetSlip slip={slip} setSlip={setSlip} stake={stake} setStake={setStake} balance={balance} placeBet={placeBet} combinedOdds={combinedOdds} potentialWin={potentialWin} />
           <Leaderboard user={user} balance={balance} />
-          <BetHistory bets={bets} settleBet={settleBet} />
+          {!user?.guest && <BetHistory bets={bets} settleBet={settleBet} />}
         </aside>
       </div>
       <div className="sticky bottom-0 z-30 border-t border-white/10 bg-[#08100d]/95 p-3 backdrop-blur xl:hidden">
@@ -360,23 +465,33 @@ export default function HenriquinhoApp() {
   );
 }
 
-function LoginGate({ onEnter }: { onEnter: (profile: AppUser) => void }) {
+function LoginGate({ language, setLanguage, onEnter }: { language: Language; setLanguage: (language: Language) => void; onEnter: (profile: AppUser) => void }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const enterWithCredentials = () => {
+    const normalizedEmail = email.trim().toLowerCase();
+    const admin = normalizedEmail === adminEmail && password === adminPassword;
+    onEnter({
+      name: name.trim() || (admin ? "Henrique Admin" : "Beta Player"),
+      email: normalizedEmail || "player@henriquinhobets.local",
+      admin,
+    });
+  };
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    onEnter({ name: name.trim() || "Beta Player", email: email.trim() || "player@henriquinhobets.local" });
+    enterWithCredentials();
   };
   return (
     <main className="min-h-screen bg-[#070a0c] text-slate-100">
       <div className="fixed inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,.26),_transparent_34%),linear-gradient(135deg,_#050806_0%,_#0d1712_50%,_#171102_100%)]" />
-      <section className="mx-auto grid min-h-screen max-w-6xl items-center gap-8 px-5 py-10 lg:grid-cols-[minmax(0,1fr)_420px]">
+      <section className="mx-auto grid min-h-screen max-w-6xl items-center gap-8 px-4 py-8 sm:px-5 lg:grid-cols-[minmax(0,1fr)_420px]">
         <div>
           <div className="mb-5 inline-flex items-center gap-2 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs font-black uppercase text-amber-200">
             <Crown className="h-4 w-4" /> Beta access
           </div>
-          <h1 className="text-5xl font-black text-white sm:text-7xl">Henriquinho<span className="text-amber-300">Bets</span></h1>
-          <p className="mt-4 max-w-2xl text-lg text-slate-300">Login, create a beta profile, or join as a guest to test live markets, wallet history, and the casino lobby.</p>
+          <h1 className="text-4xl font-black text-white sm:text-7xl">Henriquinho<span className="text-amber-300">Bets</span></h1>
+          <p className="mt-4 max-w-2xl text-base text-slate-300 sm:text-lg">{t(language, "login.subtitle")}</p>
           <div className="mt-6 grid max-w-2xl gap-3 sm:grid-cols-3">
             {["$1,000 starter balance", "Live and upcoming odds", "110 casino games"].map((item) => (
               <div key={item} className="rounded-md border border-white/10 bg-white/[0.04] p-4 text-sm font-bold text-emerald-100">{item}</div>
@@ -384,8 +499,11 @@ function LoginGate({ onEnter }: { onEnter: (profile: AppUser) => void }) {
           </div>
         </div>
         <form onSubmit={submit} className="rounded-md border border-white/10 bg-[#0b1210] p-5 shadow-2xl">
-          <LogIn className="mb-3 h-8 w-8 text-emerald-300" />
-          <h2 className="text-2xl font-black text-white">Enter HenriquinhoBets</h2>
+          <div className="mb-4 flex items-start justify-between gap-3">
+            <LogIn className="h-8 w-8 text-emerald-300" />
+            <LanguageSelect language={language} setLanguage={setLanguage} />
+          </div>
+          <h2 className="text-2xl font-black text-white">{t(language, "login.title")}</h2>
           <p className="mt-1 text-sm text-slate-400">Supabase auth hooks are ready; this beta profile starts with fresh testing funds.</p>
           <label className="mt-5 block text-xs uppercase text-slate-400">
             Name
@@ -395,16 +513,32 @@ function LoginGate({ onEnter }: { onEnter: (profile: AppUser) => void }) {
             Email
             <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" className="mt-1 w-full rounded-md border border-white/10 bg-black/30 px-3 py-3 text-base text-white" />
           </label>
-          <button className="mt-5 w-full rounded-md bg-emerald-400 py-3 font-black text-black">Login / Create beta account</button>
-          <button type="button" onClick={() => onEnter({ name: "Guest Player", email: "guest@henriquinhobets.local", guest: true })} className="mt-3 w-full rounded-md border border-amber-200/40 bg-amber-300/10 py-3 font-black text-amber-100">Join as guest</button>
+          <label className="mt-3 block text-xs uppercase text-slate-400">
+            {t(language, "login.password")}
+            <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" placeholder="beta password" className="mt-1 w-full rounded-md border border-white/10 bg-black/30 px-3 py-3 text-base text-white" />
+          </label>
+          <button type="button" onClick={enterWithCredentials} className="mt-5 w-full rounded-md bg-emerald-400 py-3 font-black text-black">{t(language, "login.submit")}</button>
+          <button type="button" onClick={() => onEnter({ name: "Guest Player", email: "guest@henriquinhobets.local", guest: true })} className="mt-3 w-full rounded-md border border-amber-200/40 bg-amber-300/10 py-3 font-black text-amber-100">{t(language, "login.guest")}</button>
           <div className="mt-4 rounded-md bg-black/25 px-3 py-3 text-xs text-slate-400">Guest mode is for beta testing only. Hosted Supabase accounts can be connected after launch.</div>
+          <div className="mt-2 rounded-md border border-emerald-300/20 bg-emerald-400/10 px-3 py-3 text-xs text-emerald-100">{t(language, "login.adminHint")}</div>
         </form>
       </section>
     </main>
   );
 }
 
-function Header({ user, balance, soundOn, setSoundOn, onMenu, onDeposit }: { user: AppUser | null; balance: number; soundOn: boolean; setSoundOn: (value: boolean) => void; onMenu: () => void; onDeposit: () => void }) {
+function LanguageSelect({ language, setLanguage }: { language: Language; setLanguage: (language: Language) => void }) {
+  return (
+    <label className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2 py-2 text-xs text-slate-200">
+      <Languages className="h-4 w-4 text-emerald-300" />
+      <select value={language} onChange={(event) => setLanguage(event.target.value as Language)} className="bg-transparent font-bold outline-none">
+        {(Object.keys(languageLabels) as Language[]).map((key) => <option key={key} value={key} className="bg-[#0b1210] text-white">{languageLabels[key]}</option>)}
+      </select>
+    </label>
+  );
+}
+
+function Header({ user, balance, soundOn, setSoundOn, onMenu, onDeposit, onSignOut, language, setLanguage }: { user: AppUser | null; balance: number; soundOn: boolean; setSoundOn: (value: boolean) => void; onMenu: () => void; onDeposit: () => void; onSignOut: () => void; language: Language; setLanguage: (language: Language) => void }) {
   return (
     <header className="sticky top-8 z-30 border-b border-white/10 bg-[#080d0b]/90 backdrop-blur">
       <div className="mx-auto flex max-w-[1540px] items-center justify-between gap-3 px-3 py-3 sm:px-5">
@@ -422,11 +556,14 @@ function Header({ user, balance, soundOn, setSoundOn, onMenu, onDeposit }: { use
         </div>
         <div className="hidden min-w-0 flex-1 items-center justify-center md:flex" />
         <div className="flex items-center gap-2">
-          <div className="rounded-md border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-right">
-            <div className="text-[10px] uppercase text-amber-200">Balance</div>
+          <div className="hidden sm:block">
+            <LanguageSelect language={language} setLanguage={setLanguage} />
+          </div>
+          <div className="rounded-md border border-amber-300/30 bg-amber-300/10 px-2 py-2 text-right sm:px-3">
+            <div className="text-[10px] uppercase text-amber-200">{t(language, "common.balance")}</div>
             <div className="font-black text-amber-100">{currency.format(balance)}</div>
           </div>
-          <button onClick={onDeposit} className="rounded-md bg-emerald-400 px-3 py-2 text-sm font-black text-black">Deposit</button>
+          <button onClick={onDeposit} className="hidden rounded-md bg-emerald-400 px-3 py-2 text-sm font-black text-black sm:block">{t(language, "common.deposit")}</button>
           <button onClick={() => setSoundOn(!soundOn)} className="rounded-md border border-white/10 bg-white/5 p-2" aria-label="Toggle sound">
             {soundOn ? <Volume2 className="h-5 w-5" /> : <VolumeX className="h-5 w-5" />}
           </button>
@@ -434,6 +571,7 @@ function Header({ user, balance, soundOn, setSoundOn, onMenu, onDeposit }: { use
             <div className="text-xs text-slate-400">{user ? user.name : "Guest"}</div>
             <div className="text-sm font-semibold text-white">{user ? "Signed in" : "Sign in"}</div>
           </div>
+          <button onClick={onSignOut} className="hidden rounded-md border border-white/10 bg-white/5 px-3 py-2 text-xs font-bold text-slate-200 hover:bg-white/10 md:block">Sign out</button>
         </div>
       </div>
     </header>
@@ -461,7 +599,8 @@ function LiveTicker({ matches, message }: { matches: Match[]; message: string })
   );
 }
 
-function Sidebar({ active, setActive, open, setOpen }: { active: string; setActive: (id: string) => void; open: boolean; setOpen: (open: boolean) => void }) {
+function Sidebar({ active, setActive, open, setOpen, language, isAdmin }: { active: string; setActive: (id: string) => void; open: boolean; setOpen: (open: boolean) => void; language: Language; isAdmin: boolean }) {
+  const visibleNav = nav.filter((item) => item.id !== "admin" || isAdmin);
   return (
     <>
       <div className={clsx("fixed inset-0 z-40 bg-black/70 lg:hidden", open ? "block" : "hidden")} onClick={() => setOpen(false)} />
@@ -471,7 +610,7 @@ function Sidebar({ active, setActive, open, setOpen }: { active: string; setActi
           <button onClick={() => setOpen(false)} aria-label="Close menu"><X className="h-5 w-5" /></button>
         </div>
         <nav className="space-y-2">
-          {nav.map((item) => {
+          {visibleNav.map((item) => {
             const Icon = item.icon;
             return (
               <button
@@ -483,7 +622,7 @@ function Sidebar({ active, setActive, open, setOpen }: { active: string; setActi
                 className={clsx("flex w-full items-center gap-3 rounded-md px-3 py-3 text-sm font-semibold transition", active === item.id ? "bg-emerald-500 text-black" : "text-slate-300 hover:bg-white/10 hover:text-white")}
               >
                 <Icon className="h-5 w-5" />
-                {item.label}
+                {t(language, `nav.${item.id}`)}
               </button>
             );
           })}
@@ -497,20 +636,20 @@ function Sidebar({ active, setActive, open, setOpen }: { active: string; setActi
   );
 }
 
-function Hero({ setActive }: { setActive: (id: string) => void }) {
+function Hero({ setActive, language }: { setActive: (id: string) => void; language: Language }) {
   return (
     <section className="overflow-hidden rounded-md border border-white/10 bg-[linear-gradient(120deg,_rgba(6,95,70,.65),_rgba(21,16,5,.82)),url('https://images.unsplash.com/photo-1508098682722-e99c43a406b2?auto=format&fit=crop&w=1600&q=80')] bg-cover bg-center p-5 shadow-2xl sm:p-7">
       <div className="max-w-3xl">
         <div className="mb-3 inline-flex items-center gap-2 rounded-md bg-black/45 px-3 py-2 text-xs font-bold uppercase text-amber-200">
-          <Sparkles className="h-4 w-4" /> live odds, casino games, premium markets
+          <Sparkles className="h-4 w-4" /> {t(language, "hero.badge")}
         </div>
         <h1 className="text-4xl font-black text-white sm:text-6xl">HenriquinhoBets</h1>
         <p className="mt-3 max-w-2xl text-base text-slate-200 sm:text-lg">
-          Sports betting, casino games, live markets, wallet history, leaderboard, and account analytics in one polished dark trading floor.
+          {t(language, "hero.copy")}
         </p>
         <div className="mt-5 flex flex-wrap gap-3">
-          <button className="rounded-md bg-emerald-400 px-4 py-3 font-black text-black" onClick={() => setActive("sports")}>Browse odds</button>
-          <button className="rounded-md border border-amber-200/50 bg-black/35 px-4 py-3 font-black text-amber-100" onClick={() => setActive("casino")}>Play casino</button>
+          <button className="rounded-md bg-emerald-400 px-4 py-3 font-black text-black" onClick={() => setActive("sports")}>{t(language, "hero.odds")}</button>
+          <button className="rounded-md border border-amber-200/50 bg-black/35 px-4 py-3 font-black text-amber-100" onClick={() => setActive("casino")}>{t(language, "hero.casino")}</button>
         </div>
       </div>
     </section>
@@ -576,7 +715,7 @@ function WorldCupPanel({ matches, loading, message }: { matches: Match[]; loadin
         <div className="rounded-md border border-white/10 bg-black/25 px-3 py-2 text-sm text-slate-200">Global soccer majors</div>
       </div>
       {loading && <div className="mt-4 grid gap-3 md:grid-cols-3">{[1, 2, 3].map((item) => <div key={item} className="h-24 animate-pulse rounded-md bg-white/10" />)}</div>}
-      {!loading && matches.length === 0 && <div className="mt-4 rounded-md bg-black/25 p-4 text-sm text-amber-100">{message}. ESPN scoreboards are updating soon.</div>}
+      {!loading && matches.length === 0 && <div className="mt-4 rounded-md bg-black/25 p-4 text-sm text-amber-100">{message}. Official scoreboards are updating soon.</div>}
       {!loading && matches.length > 0 && (
         <div className="mt-4 grid gap-3 md:grid-cols-3">
           {matches.slice(0, 6).map((match) => (
@@ -605,7 +744,7 @@ function EmptyMarkets({ message }: { message: string }) {
   return (
     <div className="rounded-md border border-amber-300/20 bg-[#0b1210] p-6 text-center">
       <div className="text-xl font-black text-white">{message}</div>
-      <p className="mt-2 text-sm text-slate-400">Markets appear here as soon as ESPN scoreboards return scheduled or live events.</p>
+      <p className="mt-2 text-sm text-slate-400">Markets appear here as soon as official scoreboards return scheduled or live events.</p>
     </div>
   );
 }
@@ -804,9 +943,47 @@ function GameModal({ game, balance, soundOn, onClose, onResult }: { game: string
         </div>
         <div className="min-h-0 flex-1 overflow-auto p-4">
           {renderGame(game, balance, settle)}
+          <RoundActivity game={game} />
         </div>
       </div>
     </div>
+  );
+}
+
+function RoundActivity({ game }: { game: string }) {
+  const activity = useMemo(() => {
+    const names = ["Mika", "Rafa", "Lia", "Bruno", "Sofia", "Theo", "Nina", "Mateo"];
+    return Array.from({ length: 6 }, (_, index) => {
+      const won = index < 4 || Math.random() > 0.35;
+      const amount = Math.round((12 + Math.random() * 180) * (won ? 1 : 0.6));
+      return {
+        id: `${game}-${index}`,
+        name: names[(game.length + index) % names.length],
+        text: won ? `won ${currency.format(amount)}` : `played ${currency.format(amount)}`,
+        positive: won,
+      };
+    });
+  }, [game]);
+
+  return (
+    <section className="mt-4 rounded-md border border-white/10 bg-white/[0.04] p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h3 className="font-black text-white">Beta activity</h3>
+          <p className="text-xs text-slate-400">Simulated community results for launch testing, not real user winnings.</p>
+        </div>
+        <span className="rounded bg-emerald-400/10 px-2 py-1 text-xs font-bold text-emerald-200">Demo feed</span>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {activity.map((item) => (
+          <div key={item.id} className="rounded-md bg-black/25 px-3 py-2 text-sm text-slate-200">
+            <span className="font-bold text-white">{item.name}</span>{" "}
+            <span className={item.positive ? "text-emerald-300" : "text-slate-400"}>{item.text}</span>
+            <span className="ml-2 text-xs text-slate-500">{game}</span>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -1617,7 +1794,13 @@ function ProfileView({ user, setUser, balance, bets, winCount, lossCount }: { us
         <Stat label="Wins" value={String(winCount)} />
         <Stat label="Losses" value={String(lossCount)} />
         <Stat label="Win rate" value={winRate} />
-        <div className="sm:col-span-4"><BetHistory bets={bets} settleBet={() => undefined} /></div>
+        <div className="sm:col-span-4">
+          {user?.guest ? (
+            <div className="rounded-md border border-amber-300/20 bg-[#0b1210] p-4 text-sm text-amber-100">Guest mode keeps gameplay temporary, so bet history is hidden until you use a beta account.</div>
+          ) : (
+            <BetHistory bets={bets} settleBet={() => undefined} />
+          )}
+        </div>
       </div>
     </section>
   );
@@ -1640,7 +1823,7 @@ function AdminView({ bets, transactions }: { bets: Bet[]; transactions: Transact
       <div className="rounded-md border border-white/10 bg-[#0b1210] p-4">
         <h2 className="mb-3 font-black text-white">Automation status</h2>
         <div className="grid gap-3 md:grid-cols-3">
-          {["ESPN scoreboards", "Calculated market odds", "Supabase realtime wallet"].map((item) => <div key={item} className="rounded-md bg-emerald-400/10 p-4 text-emerald-100"><Crown className="mb-2 h-5 w-5" />{item}<div className="mt-1 text-xs text-slate-400">Ready for production</div></div>)}
+          {["Official scoreboards", "Transparent market odds", "Supabase realtime wallet"].map((item) => <div key={item} className="rounded-md bg-emerald-400/10 p-4 text-emerald-100"><Crown className="mb-2 h-5 w-5" />{item}<div className="mt-1 text-xs text-slate-400">Ready for production</div></div>)}
         </div>
       </div>
     </section>
