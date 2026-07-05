@@ -30,6 +30,13 @@ export type Match = {
   oddsSource?: "real-provider" | "model-provider" | "calculated-demo";
   oddsUpdatedAt?: string;
   oddsProvider?: string;
+  model?: {
+    version: string;
+    confidence: number;
+    dataQuality: number;
+    margin: number;
+    signals: string[];
+  };
   source: "espn-public" | "odds-api" | "henriquinho-model";
 };
 
