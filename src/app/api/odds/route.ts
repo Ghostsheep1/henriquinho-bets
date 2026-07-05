@@ -11,6 +11,7 @@ const oddsCacheTtlMs = 5 * 60 * 1000;
 const oddsErrorCacheTtlMs = 60 * 60 * 1000;
 const scoreboardCacheTtlMs = 60 * 1000;
 const maxOddsSportsPerRefresh = Math.max(1, Number(process.env.ODDS_REFRESH_SPORT_LIMIT ?? 8));
+const modelVersion = "HENQ-OPEN-ODDS-2.0";
 
 type OddsPayload = {
   source: "odds-api" | "espn-public" | "henriquinho-model";
@@ -141,6 +142,11 @@ type ModelContext = {
   away: TeamModelInput;
 };
 
+type ModelPricing = {
+  odds: NonNullable<Match["odds"]>;
+  meta: NonNullable<Match["model"]>;
+};
+
 type EspnEvent = {
   id: string;
   date: string;
@@ -179,6 +185,23 @@ function hashUnit(seed: string) {
     hash = Math.imul(hash, 16777619);
   }
   return ((hash >>> 0) % 10000) / 10000;
+}
+
+function normalizeProbabilities(probabilities: number[]) {
+  const total = probabilities.reduce((sum, probability) => sum + probability, 0);
+  if (total <= 0) return probabilities.map(() => 1 / probabilities.length);
+  return probabilities.map((probability) => probability / total);
+}
+
+function marketCycle(startsAt: string) {
+  const starts = new Date(startsAt).getTime();
+  const base = Number.isFinite(starts) ? starts : Date.now();
+  return Math.floor((Date.now() + base) / (5 * 60 * 1000));
+}
+
+function movementSignal(context: ModelContext) {
+  const cycle = marketCycle(context.startsAt);
+  return (hashUnit(`${cycle}:${context.league}:${context.home.name}:${context.away.name}:steam`) - 0.5) * 0.055;
 }
 
 async function providerError(response: Response, label: string) {
@@ -331,21 +354,37 @@ function timeAdjustment(startsAt: string) {
   return 0;
 }
 
-function modelOdds(context: ModelContext) {
+function modelConfidence(context: ModelContext, closeness: number) {
+  const hasHomeRecord = Boolean(context.home.record);
+  const hasAwayRecord = Boolean(context.away.record);
+  const startsAt = new Date(context.startsAt).getTime();
+  const hoursUntilStart = Number.isFinite(startsAt) ? Math.abs(startsAt - Date.now()) / (60 * 60 * 1000) : 999;
+  const recordScore = (hasHomeRecord ? 0.18 : 0) + (hasAwayRecord ? 0.18 : 0);
+  const leagueScore = (leagueStrength[context.league] ?? 0.55) * 0.18;
+  const timingScore = hoursUntilStart <= 48 || context.status === "live" ? 0.18 : hoursUntilStart <= 168 ? 0.1 : 0.05;
+  const liveScore = context.status === "live" ? 0.12 : 0.06;
+  const separationScore = (1 - closeness) * 0.16;
+  return clamp(0.28 + recordScore + leagueScore + timingScore + liveScore + separationScore, 0.34, 0.93);
+}
+
+function modelOdds(context: ModelContext): ModelPricing {
   const profile = sportProfiles[context.sport];
   const live = liveAdjustment(context);
-  const homePower = teamPower(context.home, context) + live.home + timeAdjustment(context.startsAt);
+  const movement = movementSignal(context);
+  const homePower = teamPower(context.home, context) + live.home + timeAdjustment(context.startsAt) + movement;
   const awayPower = teamPower(context.away, context) + live.away;
   const powerGap = (homePower - awayPower) / Math.max(0.18, profile.volatility);
   const rawHome = sigmoid(powerGap * 2.45);
   const rawAway = 1 - rawHome;
   const closeness = 1 - Math.abs(rawHome - rawAway);
   const drawProb = context.sport === "soccer" || context.sport === "boxing" ? clamp(profile.draw * (0.72 + closeness * 0.56), 0.06, 0.34) : 0;
-  const remaining = 1 - drawProb;
-  const homeProb = clamp(rawHome * remaining, 0.04, 0.92);
-  const awayProb = clamp(rawAway * remaining, 0.04, 0.92);
-  const edge = context.status === "live" ? 0.935 : 0.945;
-  const toOdds = (probability: number) => round(clamp(edge / probability, 1.08, 18));
+  const [homeProb, drawNormalized, awayProb] = drawProb
+    ? normalizeProbabilities([clamp(rawHome * (1 - drawProb), 0.04, 0.92), drawProb, clamp(rawAway * (1 - drawProb), 0.04, 0.92)])
+    : [clamp(rawHome, 0.04, 0.92), 0, clamp(rawAway, 0.04, 0.92)];
+  const confidence = modelConfidence(context, closeness);
+  const dataQuality = clamp(confidence + (context.home.record && context.away.record ? 0.04 : -0.06), 0.28, 0.96);
+  const margin = round(clamp(0.045 + (1 - confidence) * 0.045 + (context.status === "live" ? 0.012 : 0), 0.045, 0.105), 3);
+  const toOdds = (probability: number) => round(clamp(1 / (probability * (1 + margin)), 1.08, 18));
   const expectedTotal = profile.total + live.pace + (homePower + awayPower - 1) * profile.volatility * (context.sport === "soccer" ? 1.2 : 8);
   const totalLineBase = context.sport === "soccer" || context.sport === "mlb" || context.sport === "nhl" || context.sport === "boxing"
     ? clamp(expectedTotal, profile.total * 0.55, profile.total * 1.65)
@@ -354,13 +393,31 @@ function modelOdds(context: ModelContext) {
   const overProb = clamp(0.5 + (expectedTotal - profile.total) / (profile.total * 7), 0.38, 0.62);
   const handicapLine = round((homeProb >= awayProb ? -1 : 1) * clamp(Math.abs(homeProb - awayProb) * profile.spreadStep * 2.6, profile.spreadStep, profile.spreadStep * 4), 1);
   return {
-    moneyline: {
-      home: toOdds(homeProb),
-      ...(drawProb ? { draw: toOdds(drawProb) } : {}),
-      away: toOdds(awayProb),
+    odds: {
+      moneyline: {
+        home: toOdds(homeProb),
+        ...(drawNormalized ? { draw: toOdds(drawNormalized) } : {}),
+        away: toOdds(awayProb),
+      },
+      total: { line: totalLine, over: toOdds(overProb), under: toOdds(1 - overProb) },
+      handicap: { line: handicapLine, home: round(1.86 + clamp(awayProb - homeProb, -0.22, 0.26)), away: round(1.86 + clamp(homeProb - awayProb, -0.22, 0.26)) },
     },
-    total: { line: totalLine, over: toOdds(overProb), under: toOdds(1 - overProb) },
-    handicap: { line: handicapLine, home: round(1.86 + clamp(awayProb - homeProb, -0.22, 0.26)), away: round(1.86 + clamp(homeProb - awayProb, -0.22, 0.26)) },
+    meta: {
+      version: modelVersion,
+      confidence: round(confidence),
+      dataQuality: round(dataQuality),
+      margin,
+      signals: [
+        "public-scoreboard",
+        "team-record",
+        "sport-scoring-profile",
+        "league-strength",
+        "home-advantage",
+        "time-to-start",
+        "five-minute-line-movement",
+        context.status === "live" ? "live-score-state" : "pre-match-state",
+      ],
+    },
   };
 }
 
@@ -383,6 +440,15 @@ function normalizeFallbackEvent(event: EspnEvent, config: (typeof fallbackScoreb
   const startsAt = new Date(event.date).getTime();
   if (Number.isFinite(startsAt) && startsAt < Date.now() - stalePastWindowMs && status !== "live") return null;
   const hasScore = home.score !== undefined && away.score !== undefined && (status === "live" || status === "finished");
+  const pricing = modelOdds({
+    sport: config.sport,
+    league: config.league,
+    startsAt: event.date,
+    status,
+    minute: competition?.status?.type?.shortDetail ?? competition?.status?.displayClock,
+    home: { name: home.team.displayName, record: home.records?.[0]?.summary, score: Number(home.score ?? 0), homeAway: "home" },
+    away: { name: away.team.displayName, record: away.records?.[0]?.summary, score: Number(away.score ?? 0), homeAway: "away" },
+  });
   return {
     id: `espn-${config.sport}-${event.id}`,
     sport: config.sport,
@@ -394,18 +460,11 @@ function normalizeFallbackEvent(event: EspnEvent, config: (typeof fallbackScoreb
     status,
     minute: competition?.status?.type?.shortDetail ?? competition?.status?.displayClock,
     score: hasScore ? `${home.score} - ${away.score}` : undefined,
-    odds: modelOdds({
-      sport: config.sport,
-      league: config.league,
-      startsAt: event.date,
-      status,
-      minute: competition?.status?.type?.shortDetail ?? competition?.status?.displayClock,
-      home: { name: home.team.displayName, record: home.records?.[0]?.summary, score: Number(home.score ?? 0), homeAway: "home" },
-      away: { name: away.team.displayName, record: away.records?.[0]?.summary, score: Number(away.score ?? 0), homeAway: "away" },
-    }),
+    odds: pricing.odds,
     oddsSource: "model-provider",
-    oddsProvider: "Henriquinho open model",
+    oddsProvider: `${modelVersion} open model`,
     oddsUpdatedAt: new Date().toISOString(),
+    model: pricing.meta,
     source: "henriquinho-model",
   };
 }
