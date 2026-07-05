@@ -59,6 +59,7 @@ type AppUser = { name: string; email: string; guest?: boolean; admin?: boolean }
 type LockedAccount = { email: string; name: string; lockedAt: string; reason: string };
 type Language = "en" | "es" | "pt" | "fr" | "de" | "it" | "zh" | "ja" | "ko" | "ar" | "hi";
 type RiskSignals = { level: string; casinoLosses: number; depositCount: number; recentLossVolume: number };
+type VersionPayload = { version?: string };
 
 const adminEmail = "henrique@henriquinhobets.com";
 const adminPassword = "HenriqueAdmin2026!";
@@ -452,7 +453,7 @@ function bettingPaused(match: Match) {
 }
 
 function hasBookmakerOdds(match: Match) {
-  return match.oddsSource === "real-provider" && Boolean(match.odds?.moneyline.home && match.odds.moneyline.away);
+  return Boolean(match.odds?.moneyline.home && match.odds.moneyline.away);
 }
 
 function isActiveBookmakerMarket(match: Match) {
@@ -633,7 +634,69 @@ function useLiveSports(pollMs: number) {
   return { matches, worldCup, loading, message };
 }
 
+function useLatestIndexGate() {
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    const startedAt = Date.now();
+    const minVisibleMs = 650;
+    const maxVisibleMs = 1500;
+
+    const finish = () => {
+      const remaining = Math.max(0, minVisibleMs - (Date.now() - startedAt));
+      window.setTimeout(() => {
+        if (active) setReady(true);
+      }, remaining);
+    };
+
+    const verify = async () => {
+      try {
+        const response = await fetch(`/api/version?ts=${Date.now()}`, { cache: "no-store" });
+        const payload = (await response.json()) as VersionPayload;
+        const version = payload.version || "local-dev";
+        const storageKey = "henriquinho-client-version";
+        const reloadKey = "henriquinho-reloaded-version";
+        const previousVersion = localStorage.getItem(storageKey);
+
+        if (previousVersion && previousVersion !== version && sessionStorage.getItem(reloadKey) !== version) {
+          localStorage.setItem(storageKey, version);
+          sessionStorage.setItem(reloadKey, version);
+          window.location.reload();
+          return;
+        }
+
+        localStorage.setItem(storageKey, version);
+      } catch {
+        // The app should still open if the version endpoint is temporarily unreachable.
+      }
+      finish();
+    };
+
+    verify();
+    const timeout = window.setTimeout(() => {
+      if (active) setReady(true);
+    }, maxVisibleMs);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timeout);
+    };
+  }, []);
+
+  return ready;
+}
+
+function IndexLoadingScreen() {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-[#070a0c] text-slate-100">
+      <div className="h-10 w-10 animate-spin rounded-full border-2 border-emerald-300/20 border-t-emerald-300" />
+    </main>
+  );
+}
+
 export default function HenriquinhoApp() {
+  const latestIndexReady = useLatestIndexGate();
   const [active, setActive] = useState("sports");
   const [menuOpen, setMenuOpen] = useState(false);
   const [user, setUser] = useState<AppUser | null>(null);
@@ -862,12 +925,8 @@ export default function HenriquinhoApp() {
     return { level, casinoLosses, depositCount, recentLossVolume };
   }, [transactions]);
 
-  if (!hydrated) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-[#070a0c] text-slate-100">
-        <div className="rounded-md border border-white/10 bg-[#0b1210] px-5 py-4 font-black text-white">Loading HenriquinhoBets...</div>
-      </main>
-    );
+  if (!latestIndexReady || !hydrated) {
+    return <IndexLoadingScreen />;
   }
 
   if (accessLocked) {
@@ -1183,13 +1242,13 @@ function Sportsbook({ liveOnly, matches, worldCup, loading, message, slip, setSl
       <div className="grid gap-3 md:grid-cols-3">
         {liveOnly ? (
           <>
-            <MarketModeStat label="Live first" value={`${liveCount} live`} note="Active events always appear at the top." />
-            <MarketModeStat label="Next up" value={`${startingSoonCount} soon`} note="Upcoming within 24 hours, sorted by kickoff." />
+            <MarketModeStat label="Live first" value={loading ? "..." : `${liveCount} live`} note="Active events always appear at the top." />
+            <MarketModeStat label="Next up" value={loading ? "..." : `${startingSoonCount} soon`} note="Upcoming within 24 hours, sorted by kickoff." />
             <MarketModeStat label="Closed hidden" value="No finals" note="Finished games stay out of the betting flow." />
           </>
         ) : (
           <>
-            <MarketModeStat label="Upcoming board" value={`${upcomingCount} open`} note="Only near-term bettable events." />
+            <MarketModeStat label="Upcoming board" value={loading ? "..." : `${upcomingCount} open`} note="Only near-term bettable events." />
             <MarketModeStat label="Popularity sort" value="Major leagues first" note="World Cup, top soccer, NBA/NFL, then others." />
             <MarketModeStat label="No stale cards" value="14 day cap" note="Far-future and closed games are removed." />
           </>
