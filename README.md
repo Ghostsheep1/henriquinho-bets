@@ -5,10 +5,10 @@ HenriquinhoBets is a sportsbook and casino interface built with Next.js 14 App R
 ## What is built
 
 - Supabase-ready registration/login profile flow with automatic 1,000 starting balance in SQL.
-- Sportsbook that only renders live/upcoming events returned by public scoreboards.
+- Sportsbook that renders live/upcoming events returned by public scoreboards.
 - Featured FIFA World Cup, Euro, Olympic, and Women's World Cup sections from public soccer data.
-- Real API empty states: if scoreboards are temporarily unavailable, the UI shows “Odds updating soon” instead of invented matches.
-- Calculated demo moneyline, totals, handicap, multi-pick parlays, and settlement hook. These are virtual prices, not real sportsbook lines.
+- Real bookmaker odds when provider quota is available, with a free Henriquinho open model fallback when bookmaker feeds are missing or exhausted.
+- Model-generated moneyline, totals, handicap, multi-pick parlays, and settlement hook. Model lines are virtual prices, not bookmaker lines.
 - Casino section with flagship playable games plus a 100+ game categorized lobby.
 - Deposit modal with amount presets, payment method badges, 2-second processing state, confirmation, and wallet ledger entry.
 - Wallet history, daily bonus, leaderboard, profile stats, bet history, live ticker, mobile sidebar, footer links, and admin metrics shell.
@@ -35,6 +35,16 @@ THE_ODDS_API_KEY=your-the-odds-api-key
 ODDS_API_KEY=your-the-odds-api-key
 REAL_ODDS_ONLY=true
 API_FOOTBALL_KEY=your-api-football-key
+DEFAULT_MARKET_MAX_STAKE=250
+LICENSED_INJURY_FEED_URL=
+LICENSED_INJURY_FEED_KEY=
+LICENSED_NEWS_FEED_URL=
+LICENSED_NEWS_FEED_KEY=
+LICENSED_SHARP_FEED_URL=
+LICENSED_SHARP_FEED_KEY=
+LICENSED_HISTORY_FEED_URL=
+LICENSED_HISTORY_FEED_KEY=
+TRADER_CONTROLS_JSON=
 ```
 
 Free-tier sources:
@@ -57,11 +67,33 @@ The schema creates `profiles`, `transactions`, `matches`, `bets`, and `game_roun
 
 ## API routes
 
-- `GET /api/odds`: uses The Odds API for realtime bookmaker odds when `THE_ODDS_API_KEY` or `ODDS_API_KEY` is set. With `REAL_ODDS_ONLY=true`, scoreboard events still show but calculated demo prices are not bettable.
+- `GET /api/odds`: uses The Odds API for realtime bookmaker odds when `THE_ODDS_API_KEY` or `ODDS_API_KEY` has quota. If bookmaker odds are unavailable, it returns `HENQ-OPEN-ODDS-3.0` model odds with confidence, feed status, closing-line calibration metadata, trader controls, and market risk limits.
 - `GET /api/football`: fetches featured soccer tournament scoreboards for the featured tournament panel.
 - `POST /api/settle`: placeholder settlement endpoint for a cron worker that compares open bets against final provider results.
 
-The sports UI polls often, but true odds freshness is limited by the provider and your free-tier quota.
+The open model is unlimited for the beta because it uses public scoreboards and local calculations. Licensed injury/news/sharp/history feeds are optional: configure the corresponding `LICENSED_*_FEED_URL` and `LICENSED_*_FEED_KEY` variables when you have a vendor. Each feed may return an array or `{ records: [...] }` with fields like `eventId`, `home`, `away`, `team`, `side`, `impact`, `probabilityShift`, `confidence`, `closingLineScore`, and `sampleSize`.
+
+`TRADER_CONTROLS_JSON` supports manual market controls without code changes:
+
+```json
+{
+  "defaultMaxStake": 250,
+  "defaultMarginBoost": 0.01,
+  "events": [
+    {
+      "home": "Brazil",
+      "away": "Norway",
+      "homeAdjustment": 0.04,
+      "marginBoost": 0.02,
+      "maxStake": 100,
+      "suspended": false,
+      "note": "Manual risk review"
+    }
+  ]
+}
+```
+
+Real sportsbook-level accuracy still requires licensed historical, injury, lineup, news, and market-movement feeds. The code is ready to consume them, but the data itself must come from a licensed vendor.
 
 ## Vercel deployment
 

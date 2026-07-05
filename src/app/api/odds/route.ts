@@ -11,7 +11,8 @@ const oddsCacheTtlMs = 5 * 60 * 1000;
 const oddsErrorCacheTtlMs = 60 * 60 * 1000;
 const scoreboardCacheTtlMs = 60 * 1000;
 const maxOddsSportsPerRefresh = Math.max(1, Number(process.env.ODDS_REFRESH_SPORT_LIMIT ?? 8));
-const modelVersion = "HENQ-OPEN-ODDS-2.0";
+const modelVersion = "HENQ-OPEN-ODDS-3.0";
+const defaultMaxMarketStake = Number(process.env.DEFAULT_MARKET_MAX_STAKE ?? 250);
 
 type OddsPayload = {
   source: "odds-api" | "espn-public" | "henriquinho-model";
@@ -31,6 +32,7 @@ let responseCache: CacheEntry<OddsPayload> | null = null;
 let lastGoodRealOdds: OddsPayload | null = null;
 let activeSportsCache: CacheEntry<Set<string>> | null = null;
 let fallbackCache: CacheEntry<Match[]> | null = null;
+let licensedSignalsCache: CacheEntry<{ records: Record<LicensedFeedKind, LicensedFeedRecord[]>; status: FeedStatus; traderControls: TraderControls }> | null = null;
 
 const realOddsSports: Array<{ key: string; sport: SportKey; league: string; country: string }> = [
   { key: "soccer_fifa_world_cup", sport: "soccer", league: "FIFA World Cup", country: "World" },
@@ -140,11 +142,63 @@ type ModelContext = {
   minute?: string;
   home: TeamModelInput;
   away: TeamModelInput;
+  external: ExternalSignals;
 };
 
 type ModelPricing = {
   odds: NonNullable<Match["odds"]>;
   meta: NonNullable<Match["model"]>;
+  risk: NonNullable<Match["risk"]>;
+  trader: NonNullable<Match["trader"]>;
+};
+
+type LicensedFeedKind = "injury" | "news" | "sharp" | "history";
+type FeedStatus = Record<LicensedFeedKind, "active" | "missing" | "error">;
+type LicensedFeedRecord = {
+  eventId?: string;
+  home?: string;
+  away?: string;
+  team?: string;
+  side?: "home" | "away";
+  impact?: number;
+  probabilityShift?: number;
+  confidence?: number;
+  closingLineScore?: number;
+  sampleSize?: number;
+  headline?: string;
+  note?: string;
+};
+type TraderControl = {
+  home?: string;
+  away?: string;
+  eventId?: string;
+  adjustment?: number;
+  homeAdjustment?: number;
+  awayAdjustment?: number;
+  marginBoost?: number;
+  maxStake?: number;
+  suspended?: boolean;
+  note?: string;
+};
+type TraderControls = {
+  defaultMaxStake?: number;
+  defaultMarginBoost?: number;
+  events?: TraderControl[];
+};
+type ExternalSignals = {
+  homeAdjustment: number;
+  awayAdjustment: number;
+  marginBoost: number;
+  confidenceBoost: number;
+  dataQualityBoost: number;
+  maxStake?: number;
+  suspended: boolean;
+  note?: string;
+  feedStatus: FeedStatus;
+  feedSignals: string[];
+  closingLineScore: number;
+  calibrationSampleSize: number;
+  traderControlled: boolean;
 };
 
 type EspnEvent = {
@@ -185,6 +239,142 @@ function hashUnit(seed: string) {
     hash = Math.imul(hash, 16777619);
   }
   return ((hash >>> 0) % 10000) / 10000;
+}
+
+function emptyFeedStatus(): FeedStatus {
+  return { injury: "missing", news: "missing", sharp: "missing", history: "missing" };
+}
+
+function emptyExternalSignals(feedStatus: FeedStatus = emptyFeedStatus()): ExternalSignals {
+  return {
+    homeAdjustment: 0,
+    awayAdjustment: 0,
+    marginBoost: 0,
+    confidenceBoost: 0,
+    dataQualityBoost: 0,
+    suspended: false,
+    feedStatus,
+    feedSignals: [],
+    closingLineScore: 0.5,
+    calibrationSampleSize: 0,
+    traderControlled: false,
+  };
+}
+
+function readTraderControls(): TraderControls {
+  if (!process.env.TRADER_CONTROLS_JSON) return {};
+  try {
+    return JSON.parse(process.env.TRADER_CONTROLS_JSON) as TraderControls;
+  } catch {
+    return {};
+  }
+}
+
+function feedConfig(kind: LicensedFeedKind) {
+  const prefix = `LICENSED_${kind.toUpperCase()}_FEED`;
+  return {
+    url: process.env[`${prefix}_URL`],
+    key: process.env[`${prefix}_KEY`],
+  };
+}
+
+function coerceFeedRecords(payload: unknown): LicensedFeedRecord[] {
+  if (Array.isArray(payload)) return payload as LicensedFeedRecord[];
+  if (payload && typeof payload === "object") {
+    const data = payload as { records?: unknown; events?: unknown; items?: unknown; data?: unknown };
+    const records = data.records ?? data.events ?? data.items ?? data.data;
+    if (Array.isArray(records)) return records as LicensedFeedRecord[];
+  }
+  return [];
+}
+
+async function fetchLicensedFeed(kind: LicensedFeedKind) {
+  const config = feedConfig(kind);
+  if (!config.url) return { status: "missing" as const, records: [] as LicensedFeedRecord[] };
+  try {
+    const response = await fetch(config.url, {
+      cache: "no-store",
+      headers: config.key ? { Authorization: `Bearer ${config.key}`, "x-api-key": config.key } : undefined,
+    });
+    if (!response.ok) return { status: "error" as const, records: [] as LicensedFeedRecord[] };
+    return { status: "active" as const, records: coerceFeedRecords(await response.json()) };
+  } catch {
+    return { status: "error" as const, records: [] as LicensedFeedRecord[] };
+  }
+}
+
+async function getLicensedSignals() {
+  if (licensedSignalsCache && licensedSignalsCache.expiresAt > Date.now()) return licensedSignalsCache.data;
+  const kinds: LicensedFeedKind[] = ["injury", "news", "sharp", "history"];
+  const results = await Promise.all(kinds.map(async (kind) => [kind, await fetchLicensedFeed(kind)] as const));
+  const status = emptyFeedStatus();
+  const records: Record<LicensedFeedKind, LicensedFeedRecord[]> = { injury: [], news: [], sharp: [], history: [] };
+  for (const [kind, result] of results) {
+    status[kind] = result.status;
+    records[kind] = result.records;
+  }
+  const data = { records, status, traderControls: readTraderControls() };
+  licensedSignalsCache = { expiresAt: Date.now() + scoreboardCacheTtlMs, data };
+  return data;
+}
+
+function recordMatches(record: LicensedFeedRecord | TraderControl, eventId: string, home: string, away: string) {
+  if (record.eventId && record.eventId === eventId) return true;
+  const homeKey = normalizeName(home);
+  const awayKey = normalizeName(away);
+  return (!record.home || normalizeName(record.home) === homeKey) && (!record.away || normalizeName(record.away) === awayKey);
+}
+
+function sideAdjustment(record: LicensedFeedRecord, home: string, away: string) {
+  const impact = clamp(record.impact ?? record.probabilityShift ?? 0, -0.25, 0.25);
+  if (record.side === "home" || (record.team && normalizeName(record.team) === normalizeName(home))) return { home: impact, away: -impact * 0.5 };
+  if (record.side === "away" || (record.team && normalizeName(record.team) === normalizeName(away))) return { home: -impact * 0.5, away: impact };
+  return { home: impact * 0.5, away: -impact * 0.5 };
+}
+
+function externalSignalsForEvent(eventId: string, home: string, away: string, licensed: Awaited<ReturnType<typeof getLicensedSignals>>): ExternalSignals {
+  const external = emptyExternalSignals(licensed.status);
+  const feedNames: Array<[LicensedFeedKind, string]> = [
+    ["injury", "licensed-injury-feed"],
+    ["news", "licensed-news-feed"],
+    ["sharp", "sharp-market-feed"],
+    ["history", "closing-line-history"],
+  ];
+
+  for (const [kind, signal] of feedNames) {
+    for (const record of licensed.records[kind].filter((item) => recordMatches(item, eventId, home, away))) {
+      const adjustment = sideAdjustment(record, home, away);
+      external.homeAdjustment += adjustment.home;
+      external.awayAdjustment += adjustment.away;
+      external.confidenceBoost += clamp(record.confidence ?? 0.02, 0, 0.08);
+      external.dataQualityBoost += 0.04;
+      if (record.closingLineScore !== undefined) external.closingLineScore = clamp(record.closingLineScore, 0, 1);
+      if (record.sampleSize !== undefined) external.calibrationSampleSize = Math.max(external.calibrationSampleSize, record.sampleSize);
+      if (!external.feedSignals.includes(signal)) external.feedSignals.push(signal);
+    }
+  }
+
+  const controls = licensed.traderControls;
+  external.maxStake = controls.defaultMaxStake;
+  external.marginBoost += controls.defaultMarginBoost ?? 0;
+  const control = controls.events?.find((item) => recordMatches(item, eventId, home, away));
+  if (control) {
+    external.homeAdjustment += control.homeAdjustment ?? control.adjustment ?? 0;
+    external.awayAdjustment += control.awayAdjustment ?? -(control.adjustment ?? 0) * 0.5;
+    external.marginBoost += control.marginBoost ?? 0;
+    external.maxStake = control.maxStake ?? external.maxStake;
+    external.suspended = Boolean(control.suspended);
+    external.note = control.note;
+    external.traderControlled = true;
+    external.feedSignals.push("trader-control");
+  }
+
+  external.homeAdjustment = clamp(external.homeAdjustment, -0.35, 0.35);
+  external.awayAdjustment = clamp(external.awayAdjustment, -0.35, 0.35);
+  external.marginBoost = clamp(external.marginBoost, 0, 0.08);
+  external.confidenceBoost = clamp(external.confidenceBoost, 0, 0.16);
+  external.dataQualityBoost = clamp(external.dataQualityBoost, 0, 0.2);
+  return external;
 }
 
 function normalizeProbabilities(probabilities: number[]) {
@@ -364,15 +554,15 @@ function modelConfidence(context: ModelContext, closeness: number) {
   const timingScore = hoursUntilStart <= 48 || context.status === "live" ? 0.18 : hoursUntilStart <= 168 ? 0.1 : 0.05;
   const liveScore = context.status === "live" ? 0.12 : 0.06;
   const separationScore = (1 - closeness) * 0.16;
-  return clamp(0.28 + recordScore + leagueScore + timingScore + liveScore + separationScore, 0.34, 0.93);
+  return clamp(0.28 + recordScore + leagueScore + timingScore + liveScore + separationScore + context.external.confidenceBoost, 0.34, 0.96);
 }
 
 function modelOdds(context: ModelContext): ModelPricing {
   const profile = sportProfiles[context.sport];
   const live = liveAdjustment(context);
   const movement = movementSignal(context);
-  const homePower = teamPower(context.home, context) + live.home + timeAdjustment(context.startsAt) + movement;
-  const awayPower = teamPower(context.away, context) + live.away;
+  const homePower = teamPower(context.home, context) + live.home + timeAdjustment(context.startsAt) + movement + context.external.homeAdjustment;
+  const awayPower = teamPower(context.away, context) + live.away + context.external.awayAdjustment;
   const powerGap = (homePower - awayPower) / Math.max(0.18, profile.volatility);
   const rawHome = sigmoid(powerGap * 2.45);
   const rawAway = 1 - rawHome;
@@ -382,8 +572,9 @@ function modelOdds(context: ModelContext): ModelPricing {
     ? normalizeProbabilities([clamp(rawHome * (1 - drawProb), 0.04, 0.92), drawProb, clamp(rawAway * (1 - drawProb), 0.04, 0.92)])
     : [clamp(rawHome, 0.04, 0.92), 0, clamp(rawAway, 0.04, 0.92)];
   const confidence = modelConfidence(context, closeness);
-  const dataQuality = clamp(confidence + (context.home.record && context.away.record ? 0.04 : -0.06), 0.28, 0.96);
-  const margin = round(clamp(0.045 + (1 - confidence) * 0.045 + (context.status === "live" ? 0.012 : 0), 0.045, 0.105), 3);
+  const dataQuality = clamp(confidence + (context.home.record && context.away.record ? 0.04 : -0.06) + context.external.dataQualityBoost, 0.28, 0.98);
+  const calibrationDiscount = context.external.calibrationSampleSize > 50 ? (context.external.closingLineScore - 0.5) * 0.025 : 0;
+  const margin = round(clamp(0.045 + (1 - confidence) * 0.045 + (context.status === "live" ? 0.012 : 0) + context.external.marginBoost - calibrationDiscount, 0.035, 0.14), 3);
   const toOdds = (probability: number) => round(clamp(1 / (probability * (1 + margin)), 1.08, 18));
   const expectedTotal = profile.total + live.pace + (homePower + awayPower - 1) * profile.volatility * (context.sport === "soccer" ? 1.2 : 8);
   const totalLineBase = context.sport === "soccer" || context.sport === "mlb" || context.sport === "nhl" || context.sport === "boxing"
@@ -416,8 +607,23 @@ function modelOdds(context: ModelContext): ModelPricing {
         "time-to-start",
         "five-minute-line-movement",
         context.status === "live" ? "live-score-state" : "pre-match-state",
+        ...context.external.feedSignals,
+      ],
+      feedStatus: context.external.feedStatus,
+      calibration: { closingLineScore: round(context.external.closingLineScore), sampleSize: context.external.calibrationSampleSize },
+    },
+    risk: {
+      maxStake: Math.max(1, Math.round((context.external.maxStake ?? defaultMaxMarketStake) * clamp(confidence, 0.35, 0.95) * (context.status === "live" ? 0.72 : 1))),
+      exposureTier: confidence < 0.52 || context.status === "live" ? "high" : confidence < 0.72 ? "medium" : "low",
+      reviewRequired: context.external.suspended || confidence < 0.42 || context.external.traderControlled,
+      reasons: [
+        ...(context.status === "live" ? ["live-market"] : []),
+        ...(confidence < 0.52 ? ["low-confidence"] : []),
+        ...(context.external.traderControlled ? ["trader-control"] : []),
+        ...(context.external.suspended ? ["market-suspended"] : []),
       ],
     },
+    trader: { controlled: context.external.traderControlled, suspended: context.external.suspended, note: context.external.note },
   };
 }
 
@@ -429,7 +635,7 @@ function dateKeys() {
   });
 }
 
-function normalizeFallbackEvent(event: EspnEvent, config: (typeof fallbackScoreboardEndpoints)[number]): Match | null {
+function normalizeFallbackEvent(event: EspnEvent, config: (typeof fallbackScoreboardEndpoints)[number], licensed: Awaited<ReturnType<typeof getLicensedSignals>>): Match | null {
   const competition = event.competitions?.[0];
   const competitors = competition?.competitors ?? [];
   const home = competitors.find((item) => item.homeAway === "home");
@@ -448,6 +654,7 @@ function normalizeFallbackEvent(event: EspnEvent, config: (typeof fallbackScoreb
     minute: competition?.status?.type?.shortDetail ?? competition?.status?.displayClock,
     home: { name: home.team.displayName, record: home.records?.[0]?.summary, score: Number(home.score ?? 0), homeAway: "home" },
     away: { name: away.team.displayName, record: away.records?.[0]?.summary, score: Number(away.score ?? 0), homeAway: "away" },
+    external: externalSignalsForEvent(event.id, home.team.displayName, away.team.displayName, licensed),
   });
   return {
     id: `espn-${config.sport}-${event.id}`,
@@ -465,6 +672,8 @@ function normalizeFallbackEvent(event: EspnEvent, config: (typeof fallbackScoreb
     oddsProvider: `${modelVersion} open model`,
     oddsUpdatedAt: new Date().toISOString(),
     model: pricing.meta,
+    risk: pricing.risk,
+    trader: pricing.trader,
     source: "henriquinho-model",
   };
 }
@@ -515,6 +724,7 @@ async function getRealOdds() {
 
 async function getFallbackOdds() {
   if (fallbackCache && fallbackCache.expiresAt > Date.now()) return fallbackCache.data;
+  const licensed = await getLicensedSignals();
   const results = await Promise.all(
     fallbackScoreboardEndpoints.map(async (config) => {
       const urls = config.dateWindow ? dateKeys().map((date) => `${config.url}?dates=${date}`) : [config.url];
@@ -528,7 +738,7 @@ async function getFallbackOdds() {
       );
       const byId = new Map<string, EspnEvent>();
       payloads.flat().forEach((event) => byId.set(event.id, event));
-      return Array.from(byId.values()).map((event) => normalizeFallbackEvent(event, config)).filter(Boolean) as Match[];
+      return Array.from(byId.values()).map((event) => normalizeFallbackEvent(event, config, licensed)).filter(Boolean) as Match[];
     }),
   );
   const fallback = results.flat();

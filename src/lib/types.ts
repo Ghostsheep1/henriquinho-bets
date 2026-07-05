@@ -36,6 +36,19 @@ export type Match = {
     dataQuality: number;
     margin: number;
     signals: string[];
+    feedStatus?: Record<string, "active" | "missing" | "error">;
+    calibration?: { closingLineScore: number; sampleSize: number };
+  };
+  risk?: {
+    maxStake: number;
+    exposureTier: "low" | "medium" | "high";
+    reviewRequired: boolean;
+    reasons: string[];
+  };
+  trader?: {
+    controlled: boolean;
+    suspended?: boolean;
+    note?: string;
   };
   source: "espn-public" | "odds-api" | "henriquinho-model";
 };
@@ -47,6 +60,7 @@ export type BetPick = {
   market: MarketType;
   odds: number;
   event: string;
+  maxStake?: number;
 };
 
 export type Bet = {

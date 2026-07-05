@@ -478,7 +478,7 @@ function oddsAreFresh(match: Match) {
 }
 
 function bettingPaused(match: Match) {
-  return match.status === "live" && !oddsAreFresh(match);
+  return Boolean(match.trader?.suspended) || (match.status === "live" && !oddsAreFresh(match));
 }
 
 function hasBookmakerOdds(match: Match) {
@@ -816,9 +816,10 @@ export default function HenriquinhoApp() {
 
   const combinedOdds = slip.reduce((total, pick) => total * pick.odds, 1);
   const potentialWin = payout(stake, combinedOdds);
+  const slipMaxStake = slip.length ? Math.min(...slip.map((pick) => pick.maxStake ?? Number.MAX_SAFE_INTEGER), balance) : balance;
 
   const placeBet = () => {
-    if (!slip.length || stake <= 0 || stake > balance) return;
+    if (!slip.length || stake <= 0 || stake > balance || stake > slipMaxStake) return;
     const bet: Bet = { id: uid("bet"), picks: slip, stake, potentialWin, status: "open", createdAt: new Date().toISOString() };
     setBets((items) => [bet, ...items]);
     addTransaction("bet_stake", -stake, `${slip.length > 1 ? "Parlay" : "Single"} bet placed`);
@@ -982,13 +983,13 @@ export default function HenriquinhoApp() {
           {active === "admin" && isAdmin && <AdminView bets={bets} transactions={transactions} lockedAccounts={lockedAccounts} unlockAccount={unlockAccount} />}
         </main>
         <aside className="hidden w-80 shrink-0 space-y-4 xl:block">
-          <BetSlip slip={slip} setSlip={setSlip} stake={stake} setStake={setStake} balance={balance} placeBet={placeBet} combinedOdds={combinedOdds} potentialWin={potentialWin} />
+          <BetSlip slip={slip} setSlip={setSlip} stake={stake} setStake={setStake} balance={balance} maxStake={slipMaxStake} placeBet={placeBet} combinedOdds={combinedOdds} potentialWin={potentialWin} />
           <Leaderboard user={user} balance={balance} />
           {!user?.guest && <BetHistory bets={bets} settleBet={settleBet} cashOutBet={cashOutBet} cashOutValue={(bet) => cashOutOffer(bet, matchById)} />}
         </aside>
       </div>
       <div className="sticky bottom-0 z-30 border-t border-white/10 bg-[#08100d]/95 p-3 backdrop-blur xl:hidden">
-        <BetSlip compact slip={slip} setSlip={setSlip} stake={stake} setStake={setStake} balance={balance} placeBet={placeBet} combinedOdds={combinedOdds} potentialWin={potentialWin} />
+        <BetSlip compact slip={slip} setSlip={setSlip} stake={stake} setStake={setStake} balance={balance} maxStake={slipMaxStake} placeBet={placeBet} combinedOdds={combinedOdds} potentialWin={potentialWin} />
       </div>
       <Footer />
       <DepositModal open={depositOpen} onClose={() => setDepositOpen(false)} onComplete={completeDeposit} />
@@ -1382,17 +1383,18 @@ function MatchCard({ match, addPick, slip }: { match: Match; addPick: (pick: Bet
   const realOdds = match.oddsSource === "real-provider";
   const modelOdds = match.oddsSource === "model-provider";
   const bettingOpen = (match.status === "live" || match.status === "upcoming") && !paused;
+  const maxStake = match.risk?.maxStake;
   const picks: BetPick[] = match.odds && bettingOpen ? [
-    { id: `${match.id}-home`, matchId: match.id, label: match.home, market: "moneyline", odds: match.odds.moneyline.home, event },
-    ...(match.odds.moneyline.draw ? [{ id: `${match.id}-draw`, matchId: match.id, label: "Draw", market: "moneyline" as const, odds: match.odds.moneyline.draw, event }] : []),
-    { id: `${match.id}-away`, matchId: match.id, label: match.away, market: "moneyline", odds: match.odds.moneyline.away, event },
+    { id: `${match.id}-home`, matchId: match.id, label: match.home, market: "moneyline", odds: match.odds.moneyline.home, event, maxStake },
+    ...(match.odds.moneyline.draw ? [{ id: `${match.id}-draw`, matchId: match.id, label: "Draw", market: "moneyline" as const, odds: match.odds.moneyline.draw, event, maxStake }] : []),
+    { id: `${match.id}-away`, matchId: match.id, label: match.away, market: "moneyline", odds: match.odds.moneyline.away, event, maxStake },
     ...(match.odds.total ? [
-      { id: `${match.id}-over`, matchId: match.id, label: `Over ${match.odds.total.line}`, market: "total" as const, odds: match.odds.total.over, event },
-      { id: `${match.id}-under`, matchId: match.id, label: `Under ${match.odds.total.line}`, market: "total" as const, odds: match.odds.total.under, event },
+      { id: `${match.id}-over`, matchId: match.id, label: `Over ${match.odds.total.line}`, market: "total" as const, odds: match.odds.total.over, event, maxStake },
+      { id: `${match.id}-under`, matchId: match.id, label: `Under ${match.odds.total.line}`, market: "total" as const, odds: match.odds.total.under, event, maxStake },
     ] : []),
     ...(match.odds.handicap ? [
-      { id: `${match.id}-spread-home`, matchId: match.id, label: `${match.home} ${match.odds.handicap.line}`, market: "handicap" as const, odds: match.odds.handicap.home, event },
-      { id: `${match.id}-spread-away`, matchId: match.id, label: `${match.away} ${-match.odds.handicap.line}`, market: "handicap" as const, odds: match.odds.handicap.away, event },
+      { id: `${match.id}-spread-home`, matchId: match.id, label: `${match.home} ${match.odds.handicap.line}`, market: "handicap" as const, odds: match.odds.handicap.home, event, maxStake },
+      { id: `${match.id}-spread-away`, matchId: match.id, label: `${match.away} ${-match.odds.handicap.line}`, market: "handicap" as const, odds: match.odds.handicap.away, event, maxStake },
     ] : []),
   ] : [];
   return (
@@ -1415,11 +1417,11 @@ function MatchCard({ match, addPick, slip }: { match: Match; addPick: (pick: Bet
       {!realOdds && match.odds && (
         <div className="mt-3 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs text-amber-100">
           {match.model
-            ? `${match.model.version} using ${match.model.signals.slice(0, 4).join(", ")}. Confidence ${Math.round(match.model.confidence * 100)}%, margin ${Math.round(match.model.margin * 1000) / 10}%.`
+            ? `${match.model.version} using ${match.model.signals.slice(0, 4).join(", ")}. Confidence ${Math.round(match.model.confidence * 100)}%, margin ${Math.round(match.model.margin * 1000) / 10}%, max ${currency.format(match.risk?.maxStake ?? 0)}.`
             : "Henriquinho open model using public scores, records, sport profiles, live state, and form signals."} Add THE_ODDS_API_KEY when you want bookmaker odds.
         </div>
       )}
-      {paused && <div className="mt-3 rounded-md border border-red-300/20 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-100">Live betting paused until the odds provider refreshes this market.</div>}
+      {paused && <div className="mt-3 rounded-md border border-red-300/20 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-100">{match.trader?.suspended ? `Market suspended${match.trader.note ? `: ${match.trader.note}` : ""}` : "Live betting paused until the odds provider refreshes this market."}</div>}
       {picks.length === 0 && <div className="mt-4 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-3 text-sm text-amber-100">{paused ? "Waiting for fresh live odds" : bettingOpen ? "The odds provider has not posted bookmaker lines for this event yet." : "Betting closed"}</div>}
       <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {picks.map((pick) => {
@@ -1436,7 +1438,8 @@ function MatchCard({ match, addPick, slip }: { match: Match; addPick: (pick: Bet
   );
 }
 
-function BetSlip({ compact: small, slip, setSlip, stake, setStake, balance, placeBet, combinedOdds, potentialWin }: { compact?: boolean; slip: BetPick[]; setSlip: React.Dispatch<React.SetStateAction<BetPick[]>>; stake: number; setStake: (stake: number) => void; balance: number; placeBet: () => void; combinedOdds: number; potentialWin: number }) {
+function BetSlip({ compact: small, slip, setSlip, stake, setStake, balance, maxStake, placeBet, combinedOdds, potentialWin }: { compact?: boolean; slip: BetPick[]; setSlip: React.Dispatch<React.SetStateAction<BetPick[]>>; stake: number; setStake: (stake: number) => void; balance: number; maxStake: number; placeBet: () => void; combinedOdds: number; potentialWin: number }) {
+  const stakeLimit = Math.min(balance, maxStake);
   return (
     <div className="rounded-md border border-emerald-300/20 bg-[#0b1210] p-4">
       <div className="mb-3 flex items-center justify-between">
@@ -1455,20 +1458,22 @@ function BetSlip({ compact: small, slip, setSlip, stake, setStake, balance, plac
               <button onClick={() => setSlip((items) => items.filter((item) => item.id !== pick.id))} className="text-slate-400" aria-label="Remove pick"><X className="h-4 w-4" /></button>
             </div>
             <div className="mt-2 text-emerald-300">@ {compact.format(pick.odds)}</div>
+            {pick.maxStake && <div className="mt-1 text-[11px] text-slate-500">Market max {currency.format(pick.maxStake)}</div>}
           </div>
         ))}
       </div>
       <div className="mt-3 grid grid-cols-2 gap-2">
         <label className="text-xs uppercase text-slate-400">
           Stake
-          <input value={stake} onChange={(event) => setStake(Number(event.target.value))} min={1} max={balance} type="number" className="mt-1 w-full rounded-md border border-white/10 bg-black/30 px-3 py-2 text-base text-white" />
+          <input value={stake} onChange={(event) => setStake(Number(event.target.value))} min={1} max={stakeLimit} type="number" className="mt-1 w-full rounded-md border border-white/10 bg-black/30 px-3 py-2 text-base text-white" />
         </label>
         <div className="rounded-md bg-amber-300/10 p-2">
           <div className="text-xs uppercase text-amber-200">Potential</div>
           <div className="font-black text-amber-100">{currency.format(potentialWin || 0)}</div>
         </div>
       </div>
-      <button disabled={!slip.length || stake > balance} onClick={placeBet} className="mt-3 w-full rounded-md bg-emerald-400 px-4 py-3 font-black text-black disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400">
+      {slip.length > 0 && <div className="mt-2 text-xs text-slate-400">Account/market risk max: {currency.format(stakeLimit)}</div>}
+      <button disabled={!slip.length || stake > balance || stake > stakeLimit} onClick={placeBet} className="mt-3 w-full rounded-md bg-emerald-400 px-4 py-3 font-black text-black disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400">
         Place bet {combinedOdds > 1 ? `@ ${compact.format(combinedOdds)}` : ""}
       </button>
     </div>
