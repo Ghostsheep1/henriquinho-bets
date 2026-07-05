@@ -1256,7 +1256,8 @@ function Sportsbook({ liveOnly, matches, worldCup, loading, message, slip, setSl
     if (liveOnly) return base.filter(isInPlayMarket).sort(inPlayRank);
     return base.sort(sportsbookRank);
   }, [bettableMatches, league, liveOnly, sport]);
-  const providerBlocked = /quota|provider error|api key|missing real odds/i.test(message);
+  const providerReady = message === "ok" || message.startsWith("Realtime bookmaker odds loaded") || message.startsWith("Showing last good bookmaker odds");
+  const providerBlocked = Boolean(message && !providerReady);
   const emptyMessage = providerBlocked ? message : liveOnly ? "No live or starting-soon bookmaker markets" : "No bookmaker odds for this filter yet";
   const liveCount = bettableMatches.filter((match) => match.status === "live").length;
   const startingSoonCount = bettableMatches.filter((match) => match.status !== "live" && isInPlayMarket(match)).length;
