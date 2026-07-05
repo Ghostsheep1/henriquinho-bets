@@ -443,7 +443,7 @@ function oddsAreFresh(match: Match) {
   if (match.oddsSource !== "real-provider") return false;
   const updatedAt = new Date(match.oddsUpdatedAt ?? "").getTime();
   if (!Number.isFinite(updatedAt)) return false;
-  const maxAge = match.status === "live" ? 20 * 1000 : 2 * 60 * 1000;
+  const maxAge = match.status === "live" ? 30 * 60 * 1000 : 2 * 60 * 60 * 1000;
   return Date.now() - updatedAt <= maxAge;
 }
 
@@ -452,7 +452,15 @@ function bettingPaused(match: Match) {
 }
 
 function hasBookmakerOdds(match: Match) {
-  return match.oddsSource === "real-provider" && Boolean(match.odds);
+  return match.oddsSource === "real-provider" && Boolean(match.odds?.moneyline.home && match.odds.moneyline.away);
+}
+
+function isActiveBookmakerMarket(match: Match) {
+  const startsAt = new Date(match.startsAt).getTime();
+  if (!hasBookmakerOdds(match) || match.status === "finished" || match.status === "postponed" || !Number.isFinite(startsAt)) return false;
+  const age = Date.now() - startsAt;
+  const future = startsAt - Date.now();
+  return age <= 6 * 60 * 60 * 1000 && future <= 14 * 24 * 60 * 60 * 1000;
 }
 
 function isUpcomingMarket(match: Match) {
@@ -1156,15 +1164,15 @@ function Hero({ setActive, language }: { setActive: (id: string) => void; langua
 function Sportsbook({ liveOnly, matches, worldCup, loading, message, slip, setSlip }: { liveOnly?: boolean; matches: Match[]; worldCup: Match[]; loading: boolean; message: string; slip: BetPick[]; setSlip: React.Dispatch<React.SetStateAction<BetPick[]>> }) {
   const [sport, setSport] = useState<SportKey | "all">("all");
   const [league, setLeague] = useState("All leagues");
+  const bettableMatches = useMemo(() => matches.filter(isActiveBookmakerMarket), [matches]);
   const visibleMatches = useMemo(() => {
-    const base = matches.filter((match) => hasBookmakerOdds(match) && (sport === "all" || match.sport === sport) && (league === "All leagues" || match.league === league));
+    const base = bettableMatches.filter((match) => (sport === "all" || match.sport === sport) && (league === "All leagues" || match.league === league));
     if (liveOnly) return base.filter(isInPlayMarket).sort(inPlayRank);
-    return base.filter(isUpcomingMarket).sort(sportsbookRank);
-  }, [league, liveOnly, matches, sport]);
-  const bettableMatches = useMemo(() => matches.filter(hasBookmakerOdds), [matches]);
+    return base.sort(sportsbookRank);
+  }, [bettableMatches, league, liveOnly, sport]);
   const liveCount = bettableMatches.filter((match) => match.status === "live").length;
   const startingSoonCount = bettableMatches.filter((match) => match.status !== "live" && isInPlayMarket(match)).length;
-  const upcomingCount = bettableMatches.filter(isUpcomingMarket).length;
+  const upcomingCount = bettableMatches.length;
   const addPick = (pick: BetPick) => {
     setSlip((items) => (items.some((item) => item.id === pick.id) ? items.filter((item) => item.id !== pick.id) : [...items.filter((item) => item.matchId !== pick.matchId || item.market !== pick.market), pick]));
   };
