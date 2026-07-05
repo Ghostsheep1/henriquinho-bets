@@ -451,6 +451,10 @@ function bettingPaused(match: Match) {
   return match.status === "live" && !oddsAreFresh(match);
 }
 
+function hasBookmakerOdds(match: Match) {
+  return match.oddsSource === "real-provider" && Boolean(match.odds);
+}
+
 function isUpcomingMarket(match: Match) {
   const startsAt = new Date(match.startsAt).getTime();
   if (match.status !== "upcoming" || !Number.isFinite(startsAt)) return false;
@@ -468,6 +472,8 @@ function popularityScore(match: Match) {
 }
 
 function sportsbookRank(a: Match, b: Match) {
+  if (hasBookmakerOdds(a) && !hasBookmakerOdds(b)) return -1;
+  if (!hasBookmakerOdds(a) && hasBookmakerOdds(b)) return 1;
   const scoreGap = popularityScore(b) - popularityScore(a);
   if (scoreGap !== 0) return scoreGap;
   return timeUntilStart(a) - timeUntilStart(b);
@@ -1151,13 +1157,14 @@ function Sportsbook({ liveOnly, matches, worldCup, loading, message, slip, setSl
   const [sport, setSport] = useState<SportKey | "all">("all");
   const [league, setLeague] = useState("All leagues");
   const visibleMatches = useMemo(() => {
-    const base = matches.filter((match) => (sport === "all" || match.sport === sport) && (league === "All leagues" || match.league === league));
+    const base = matches.filter((match) => hasBookmakerOdds(match) && (sport === "all" || match.sport === sport) && (league === "All leagues" || match.league === league));
     if (liveOnly) return base.filter(isInPlayMarket).sort(inPlayRank);
     return base.filter(isUpcomingMarket).sort(sportsbookRank);
   }, [league, liveOnly, matches, sport]);
-  const liveCount = matches.filter((match) => match.status === "live").length;
-  const startingSoonCount = matches.filter((match) => match.status !== "live" && isInPlayMarket(match)).length;
-  const upcomingCount = matches.filter(isUpcomingMarket).length;
+  const bettableMatches = useMemo(() => matches.filter(hasBookmakerOdds), [matches]);
+  const liveCount = bettableMatches.filter((match) => match.status === "live").length;
+  const startingSoonCount = bettableMatches.filter((match) => match.status !== "live" && isInPlayMarket(match)).length;
+  const upcomingCount = bettableMatches.filter(isUpcomingMarket).length;
   const addPick = (pick: BetPick) => {
     setSlip((items) => (items.some((item) => item.id === pick.id) ? items.filter((item) => item.id !== pick.id) : [...items.filter((item) => item.matchId !== pick.matchId || item.market !== pick.market), pick]));
   };
@@ -1191,7 +1198,7 @@ function Sportsbook({ liveOnly, matches, worldCup, loading, message, slip, setSl
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_260px]">
         <div className="space-y-3">
           {loading && <SkeletonMarkets />}
-          {!loading && visibleMatches.length === 0 && <EmptyMarkets message={liveOnly ? "No live or starting-soon markets" : message} />}
+          {!loading && visibleMatches.length === 0 && <EmptyMarkets message={liveOnly ? "No live or starting-soon bookmaker markets" : "No bookmaker odds for this filter yet"} />}
           {visibleMatches.map((match) => (
             <MatchCard key={match.id} match={match} addPick={addPick} slip={slip} />
           ))}
@@ -1302,13 +1309,13 @@ function MatchCard({ match, addPick, slip }: { match: Match; addPick: (pick: Bet
           <p className="text-sm text-slate-400">{match.score ?? dateTime.format(new Date(match.startsAt))} {match.minute ? `- ${match.minute}` : ""}</p>
         </div>
         <div className={clsx("rounded-md px-3 py-2 text-sm font-bold", realOdds ? "bg-emerald-400/10 text-emerald-200" : "bg-amber-300/10 text-amber-100")}>
-          {paused ? "Odds refresh locked" : bettingOpen && match.odds ? realOdds ? "Realtime odds" : "Calculated demo odds" : match.status === "finished" ? "Final" : "Realtime odds required"}
+          {paused ? "Odds refresh locked" : bettingOpen && match.odds ? realOdds ? "Realtime odds" : "Calculated demo odds" : match.status === "finished" ? "Final" : "Odds unavailable"}
         </div>
       </div>
       {realOdds && match.oddsUpdatedAt && <div className="mt-3 rounded-md border border-emerald-300/20 bg-emerald-400/10 px-3 py-2 text-xs text-emerald-100">Provider: {match.oddsProvider}. Updated {new Date(match.oddsUpdatedAt).toLocaleTimeString()}.</div>}
       {!realOdds && match.odds && <div className="mt-3 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs text-amber-100">Demo fallback odds. Add THE_ODDS_API_KEY to show realtime sportsbook odds.</div>}
       {paused && <div className="mt-3 rounded-md border border-red-300/20 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-100">Live betting paused until the odds provider refreshes this market.</div>}
-      {picks.length === 0 && <div className="mt-4 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-3 text-sm text-amber-100">{paused ? "Waiting for fresh live odds" : bettingOpen ? "Add THE_ODDS_API_KEY or ODDS_API_KEY to show realtime bookmaker odds." : "Betting closed"}</div>}
+      {picks.length === 0 && <div className="mt-4 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-3 text-sm text-amber-100">{paused ? "Waiting for fresh live odds" : bettingOpen ? "The odds provider has not posted bookmaker lines for this event yet." : "Betting closed"}</div>}
       <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {picks.map((pick) => {
           const selected = slip.some((item) => item.id === pick.id);
