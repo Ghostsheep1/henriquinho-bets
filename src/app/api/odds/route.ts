@@ -4,9 +4,30 @@ import type { Match, SportKey } from "@/lib/types";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const oddsApiKeyRaw = process.env.THE_ODDS_API_KEY ?? process.env.ODDS_API_KEY;
+const oddsApiKeyRaw = (process.env.THE_ODDS_API_KEY ?? process.env.ODDS_API_KEY ?? "").trim();
 const oddsApiKey = oddsApiKeyRaw && !oddsApiKeyRaw.includes("your-") ? oddsApiKeyRaw : undefined;
 const realOddsOnly = process.env.REAL_ODDS_ONLY !== "false";
+const oddsCacheTtlMs = 30 * 1000;
+const scoreboardCacheTtlMs = 60 * 1000;
+
+type OddsPayload = {
+  source: "odds-api" | "espn-public";
+  oddsSource: "real-provider" | "calculated-demo";
+  configured: boolean;
+  realOddsOnly: boolean;
+  matches: Match[];
+  message: string;
+  cached?: boolean;
+  stale?: boolean;
+  providerError?: string;
+};
+
+type CacheEntry<T> = { expiresAt: number; data: T };
+
+let responseCache: CacheEntry<OddsPayload> | null = null;
+let lastGoodRealOdds: OddsPayload | null = null;
+let activeSportsCache: CacheEntry<Set<string>> | null = null;
+let fallbackCache: CacheEntry<Match[]> | null = null;
 
 const realOddsSports: Array<{ key: string; sport: SportKey; league: string; country: string }> = [
   { key: "soccer_fifa_world_cup", sport: "soccer", league: "FIFA World Cup", country: "World" },
@@ -234,12 +255,16 @@ function normalizeFallbackEvent(event: EspnEvent, config: (typeof fallbackScoreb
 
 async function getRealOdds() {
   if (!oddsApiKey) return null;
-  const activeSportsResponse = await fetch(`https://api.the-odds-api.com/v4/sports/?apiKey=${oddsApiKey}`, { cache: "no-store" });
-  if (!activeSportsResponse.ok) {
-    throw new Error(`The Odds API sports request failed: ${activeSportsResponse.status}`);
+  let activeKeys = activeSportsCache?.expiresAt && activeSportsCache.expiresAt > Date.now() ? activeSportsCache.data : null;
+  if (!activeKeys) {
+    const activeSportsResponse = await fetch(`https://api.the-odds-api.com/v4/sports/?apiKey=${oddsApiKey}`, { cache: "no-store" });
+    if (!activeSportsResponse.ok) {
+      throw new Error(`The Odds API sports request failed: ${activeSportsResponse.status}`);
+    }
+    const activeSports = (await activeSportsResponse.json()) as Array<{ key: string; active: boolean }>;
+    activeKeys = new Set(activeSports.filter((sport) => sport.active).map((sport) => sport.key));
+    activeSportsCache = { expiresAt: Date.now() + 10 * 60 * 1000, data: activeKeys };
   }
-  const activeSports = (await activeSportsResponse.json()) as Array<{ key: string; active: boolean }>;
-  const activeKeys = new Set(activeSports.filter((sport) => sport.active).map((sport) => sport.key));
   const configs = realOddsSports.filter((config) => activeKeys.has(config.key));
   const results = await Promise.all(
     configs.map(async (config) => {
@@ -259,6 +284,7 @@ async function getRealOdds() {
 }
 
 async function getFallbackOdds() {
+  if (fallbackCache && fallbackCache.expiresAt > Date.now()) return fallbackCache.data;
   const results = await Promise.all(
     fallbackScoreboardEndpoints.map(async (config) => {
       const urls = config.dateWindow ? dateKeys().map((date) => `${config.url}?dates=${date}`) : [config.url];
@@ -275,7 +301,9 @@ async function getFallbackOdds() {
       return Array.from(byId.values()).map((event) => normalizeFallbackEvent(event, config)).filter(Boolean) as Match[];
     }),
   );
-  return results.flat();
+  const fallback = results.flat();
+  fallbackCache = { expiresAt: Date.now() + scoreboardCacheTtlMs, data: fallback };
+  return fallback;
 }
 
 function stripCalculatedOdds(matches: Match[]) {
@@ -290,21 +318,28 @@ function stripCalculatedOdds(matches: Match[]) {
 }
 
 export async function GET() {
+  if (responseCache && responseCache.expiresAt > Date.now()) {
+    return NextResponse.json({ ...responseCache.data, cached: true }, { headers: { "Cache-Control": "private, max-age=10" } });
+  }
+
   try {
     const realOdds = await getRealOdds();
     if (realOdds?.length) {
-      return NextResponse.json({
+      const payload: OddsPayload = {
         source: "odds-api",
         oddsSource: "real-provider",
         configured: true,
         realOddsOnly,
         matches: realOdds,
         message: "Realtime bookmaker odds loaded",
-      });
+      };
+      responseCache = { expiresAt: Date.now() + oddsCacheTtlMs, data: payload };
+      lastGoodRealOdds = payload;
+      return NextResponse.json(payload, { headers: { "Cache-Control": "private, max-age=10" } });
     }
 
     const fallback = await getFallbackOdds();
-    return NextResponse.json({
+    const payload: OddsPayload = {
       source: "espn-public",
       oddsSource: realOddsOnly ? "real-provider" : "calculated-demo",
       configured: Boolean(oddsApiKey),
@@ -313,10 +348,22 @@ export async function GET() {
       message: oddsApiKey
         ? "The Odds API returned no active bookmaker odds for these events yet."
         : "Missing THE_ODDS_API_KEY or ODDS_API_KEY. Add a real key for realtime bookmaker odds.",
-    });
+    };
+    responseCache = { expiresAt: Date.now() + scoreboardCacheTtlMs, data: payload };
+    return NextResponse.json(payload, { headers: { "Cache-Control": "private, max-age=10" } });
   } catch (error) {
+    if (lastGoodRealOdds) {
+      const payload: OddsPayload = {
+        ...lastGoodRealOdds,
+        stale: true,
+        message: "Showing last good bookmaker odds while provider refreshes.",
+        providerError: error instanceof Error ? error.message : "Unknown odds provider error",
+      };
+      responseCache = { expiresAt: Date.now() + oddsCacheTtlMs, data: payload };
+      return NextResponse.json(payload, { headers: { "Cache-Control": "private, max-age=10" } });
+    }
     const fallback = await getFallbackOdds().catch(() => []);
-    return NextResponse.json({
+    const payload: OddsPayload = {
       source: "odds-api",
       oddsSource: realOddsOnly ? "real-provider" : "calculated-demo",
       configured: Boolean(oddsApiKey),
@@ -324,6 +371,8 @@ export async function GET() {
       matches: stripCalculatedOdds(fallback),
       message: oddsApiKey ? "Realtime odds provider error. Check API quota/key and try again." : "Missing real odds API key.",
       providerError: error instanceof Error ? error.message : "Unknown odds provider error",
-    });
+    };
+    responseCache = { expiresAt: Date.now() + scoreboardCacheTtlMs, data: payload };
+    return NextResponse.json(payload, { headers: { "Cache-Control": "private, max-age=10" } });
   }
 }

@@ -352,6 +352,8 @@ type SportsPayload = {
   message: string;
   providerError?: string;
   realOddsOnly?: boolean;
+  cached?: boolean;
+  stale?: boolean;
   oddsSource?: "real-provider" | "calculated-demo";
 };
 
@@ -554,13 +556,20 @@ function useLiveSports(pollMs: number) {
   const [worldCup, setWorldCup] = useState<Match[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("Loading markets");
+  const loadedRef = useRef(false);
+  const refreshInFlightRef = useRef(false);
 
   useEffect(() => {
     let active = true;
     const load = async () => {
-      setLoading(true);
+      if (refreshInFlightRef.current) return;
+      refreshInFlightRef.current = true;
+      if (!loadedRef.current) setLoading(true);
       try {
-        const [oddsResponse, footballResponse] = await Promise.all([fetch("/api/odds"), fetch("/api/football")]);
+        const [oddsResponse, footballResponse] = await Promise.all([
+          fetch("/api/odds", { cache: "no-store" }),
+          fetch("/api/football", { cache: "no-store" }),
+        ]);
         const odds = (await oddsResponse.json()) as SportsPayload;
         const football = (await footballResponse.json()) as SportsPayload;
         const byId = new Map<string, Match>();
@@ -583,13 +592,19 @@ function useLiveSports(pollMs: number) {
         setMatches(freshMatches);
         setWorldCup((football.worldCup ?? []).filter(isFreshMarket));
         setMessage(odds.configured && odds.oddsSource === "real-provider" ? odds.message : odds.message || "Realtime odds key required");
+        loadedRef.current = true;
       } catch {
         if (!active) return;
-        setMatches([]);
-        setWorldCup([]);
-        setMessage("Markets updating soon");
+        if (!loadedRef.current) {
+          setMatches([]);
+          setWorldCup([]);
+          setMessage("Markets updating soon");
+        } else {
+          setMessage("Refreshing markets in the background");
+        }
       } finally {
         if (active) setLoading(false);
+        refreshInFlightRef.current = false;
       }
     };
 
@@ -621,7 +636,7 @@ export default function HenriquinhoApp() {
   const [lastBonus, setLastBonus] = useState<string | null>(null);
   const [depositOpen, setDepositOpen] = useState(false);
   const [soundOn, setSoundOn] = useState(true);
-  const { matches, worldCup, loading, message } = useLiveSports(active === "live" ? 1000 : 10000);
+  const { matches, worldCup, loading, message } = useLiveSports(active === "live" ? 15000 : 30000);
   const matchById = useMemo(() => new Map(matches.map((match) => [match.id, match])), [matches]);
 
   useEffect(() => {
