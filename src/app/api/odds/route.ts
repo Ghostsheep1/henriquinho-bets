@@ -7,8 +7,10 @@ export const revalidate = 0;
 const oddsApiKeyRaw = (process.env.THE_ODDS_API_KEY ?? process.env.ODDS_API_KEY ?? "").trim();
 const oddsApiKey = oddsApiKeyRaw && !oddsApiKeyRaw.includes("your-") ? oddsApiKeyRaw : undefined;
 const realOddsOnly = process.env.REAL_ODDS_ONLY !== "false";
-const oddsCacheTtlMs = 30 * 1000;
+const oddsCacheTtlMs = 5 * 60 * 1000;
+const oddsErrorCacheTtlMs = 60 * 60 * 1000;
 const scoreboardCacheTtlMs = 60 * 1000;
+const maxOddsSportsPerRefresh = Math.max(1, Number(process.env.ODDS_REFRESH_SPORT_LIMIT ?? 8));
 
 type OddsPayload = {
   source: "odds-api" | "espn-public";
@@ -52,6 +54,24 @@ const realOddsSports: Array<{ key: string; sport: SportKey; league: string; coun
   { key: "boxing_boxing", sport: "boxing", league: "Boxing", country: "Global" },
 ];
 
+const oddsRefreshPriority = [
+  "baseball_mlb",
+  "soccer_fifa_world_cup",
+  "soccer_uefa_european_championship",
+  "soccer_epl",
+  "americanfootball_nfl",
+  "basketball_nba",
+  "soccer_uefa_champs_league",
+  "soccer_copa_libertadores",
+  "soccer_brazil_campeonato",
+  "soccer_usa_mls",
+  "icehockey_nhl",
+  "mma_mixed_martial_arts",
+  "tennis_atp",
+  "tennis_wta",
+  "boxing_boxing",
+] as const;
+
 const fallbackScoreboardEndpoints: Array<{ url: string; sport: SportKey; league: string; country: string; dateWindow?: boolean }> = [
   { url: "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard", sport: "soccer", league: "FIFA World Cup", country: "World", dateWindow: true },
   { url: "https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.euro/scoreboard", sport: "soccer", league: "UEFA Euro", country: "Europe", dateWindow: true },
@@ -93,6 +113,8 @@ type OddsApiEvent = {
   bookmakers?: OddsApiBookmaker[];
 };
 
+type OddsApiErrorBody = { message?: string; error_code?: string };
+
 type EspnCompetition = {
   competitors: Array<{
     homeAway: "home" | "away";
@@ -118,6 +140,18 @@ function decimal(price?: number) {
 
 function normalizeName(name: string) {
   return name.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+async function providerError(response: Response, label: string) {
+  const text = await response.text().catch(() => "");
+  try {
+    const parsed = JSON.parse(text) as OddsApiErrorBody;
+    const code = parsed.error_code ? ` ${parsed.error_code}` : "";
+    const message = parsed.message ? ` - ${parsed.message}` : "";
+    return `${label} failed: ${response.status}${code}${message}`;
+  } catch {
+    return `${label} failed: ${response.status}${text ? ` - ${text.slice(0, 120)}` : ""}`;
+  }
 }
 
 function chooseBookmaker(bookmakers: OddsApiBookmaker[] = []) {
@@ -265,22 +299,36 @@ async function getRealOdds() {
     activeKeys = new Set(activeSports.filter((sport) => sport.active).map((sport) => sport.key));
     activeSportsCache = { expiresAt: Date.now() + 10 * 60 * 1000, data: activeKeys };
   }
-  const configs = realOddsSports.filter((config) => activeKeys.has(config.key));
+  const configs = realOddsSports
+    .filter((config) => activeKeys.has(config.key))
+    .sort((a, b) => {
+      const aRank = oddsRefreshPriority.indexOf(a.key as (typeof oddsRefreshPriority)[number]);
+      const bRank = oddsRefreshPriority.indexOf(b.key as (typeof oddsRefreshPriority)[number]);
+      return (aRank === -1 ? 99 : aRank) - (bRank === -1 ? 99 : bRank);
+    })
+    .slice(0, maxOddsSportsPerRefresh);
   const results = await Promise.all(
     configs.map(async (config) => {
-      const url = new URL(`https://api.the-odds-api.com/v4/sports/${config.key}/odds`);
-      url.searchParams.set("apiKey", oddsApiKey);
-      url.searchParams.set("regions", "us,uk,eu");
-      url.searchParams.set("markets", "h2h,spreads,totals");
-      url.searchParams.set("oddsFormat", "decimal");
-      url.searchParams.set("dateFormat", "iso");
-      const response = await fetch(url, { cache: "no-store" });
-      if (!response.ok) throw new Error(`${config.key} odds request failed: ${response.status}`);
-      const payload = (await response.json()) as OddsApiEvent[];
-      return payload.map((event) => normalizeOddsEvent(event, config)).filter(Boolean) as Match[];
+      try {
+        const url = new URL(`https://api.the-odds-api.com/v4/sports/${config.key}/odds`);
+        url.searchParams.set("apiKey", oddsApiKey);
+        url.searchParams.set("regions", "us,uk,eu");
+        url.searchParams.set("markets", "h2h,spreads,totals");
+        url.searchParams.set("oddsFormat", "decimal");
+        url.searchParams.set("dateFormat", "iso");
+        const response = await fetch(url, { cache: "no-store" });
+        if (!response.ok) return { matches: [] as Match[], error: await providerError(response, `${config.key} odds request`) };
+        const payload = (await response.json()) as OddsApiEvent[];
+        return { matches: payload.map((event) => normalizeOddsEvent(event, config)).filter(Boolean) as Match[] };
+      } catch (error) {
+        return { matches: [] as Match[], error: error instanceof Error ? `${config.key}: ${error.message}` : `${config.key}: unknown provider error` };
+      }
     }),
   );
-  return results.flat().sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
+  const matches = results.flatMap((result) => result.matches).sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
+  const errors = results.map((result) => result.error).filter(Boolean) as string[];
+  if (!matches.length && errors.length) throw new Error(errors.slice(0, 3).join("; "));
+  return { matches, errors };
 }
 
 async function getFallbackOdds() {
@@ -324,14 +372,15 @@ export async function GET() {
 
   try {
     const realOdds = await getRealOdds();
-    if (realOdds?.length) {
+    if (realOdds?.matches.length) {
       const payload: OddsPayload = {
         source: "odds-api",
         oddsSource: "real-provider",
         configured: true,
         realOddsOnly,
-        matches: realOdds,
-        message: "Realtime bookmaker odds loaded",
+        matches: realOdds.matches,
+        message: realOdds.errors.length ? "Realtime bookmaker odds loaded for active supported markets." : "Realtime bookmaker odds loaded",
+        providerError: realOdds.errors[0],
       };
       responseCache = { expiresAt: Date.now() + oddsCacheTtlMs, data: payload };
       lastGoodRealOdds = payload;
@@ -369,10 +418,12 @@ export async function GET() {
       configured: Boolean(oddsApiKey),
       realOddsOnly,
       matches: stripCalculatedOdds(fallback),
-      message: oddsApiKey ? "Realtime odds provider error. Check API quota/key and try again." : "Missing real odds API key.",
+      message: oddsApiKey && error instanceof Error && error.message.includes("OUT_OF_USAGE_CREDITS")
+        ? "The Odds API quota is used up. Add a fresh key or wait for the quota reset to show real bookmaker odds."
+        : oddsApiKey ? "Realtime odds provider error. Check API quota/key and try again." : "Missing real odds API key.",
       providerError: error instanceof Error ? error.message : "Unknown odds provider error",
     };
-    responseCache = { expiresAt: Date.now() + scoreboardCacheTtlMs, data: payload };
+    responseCache = { expiresAt: Date.now() + (payload.providerError?.includes("OUT_OF_USAGE_CREDITS") ? oddsErrorCacheTtlMs : scoreboardCacheTtlMs), data: payload };
     return NextResponse.json(payload, { headers: { "Cache-Control": "private, max-age=10" } });
   }
 }

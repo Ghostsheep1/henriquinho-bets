@@ -425,6 +425,34 @@ function matchKey(match: Match) {
   return `${match.sport}:${match.league}:${match.home}:${match.away}:${date}`.toLowerCase();
 }
 
+function mergeMatch(existing: Match | undefined, incoming: Match) {
+  if (!existing) return incoming;
+  const incomingHasOdds = hasBookmakerOdds(incoming);
+  const existingHasOdds = hasBookmakerOdds(existing);
+  if (incomingHasOdds || (!existingHasOdds && incoming.source === "odds-api")) {
+    return {
+      ...existing,
+      ...incoming,
+      score: incoming.score ?? existing.score,
+      minute: incoming.minute ?? existing.minute,
+      odds: incoming.odds ?? existing.odds,
+      oddsSource: incoming.oddsSource ?? existing.oddsSource,
+      oddsProvider: incoming.oddsProvider ?? existing.oddsProvider,
+      oddsUpdatedAt: incoming.oddsUpdatedAt ?? existing.oddsUpdatedAt,
+    };
+  }
+  return {
+    ...incoming,
+    ...existing,
+    score: incoming.score ?? existing.score,
+    minute: incoming.minute ?? existing.minute,
+    odds: existing.odds ?? incoming.odds,
+    oddsSource: existing.oddsSource ?? incoming.oddsSource,
+    oddsProvider: existing.oddsProvider ?? incoming.oddsProvider,
+    oddsUpdatedAt: existing.oddsUpdatedAt ?? incoming.oddsUpdatedAt,
+  };
+}
+
 function isFreshMarket(match: Match) {
   const startsAt = new Date(match.startsAt).getTime();
   if (!Number.isFinite(startsAt)) return match.status === "live";
@@ -591,8 +619,7 @@ function useLiveSports(pollMs: number) {
 
         for (const match of [...(football.matches ?? []), ...(odds.matches ?? [])]) {
           const key = matchKey(match);
-          const existing = byId.get(key);
-          byId.set(key, existing ? { ...existing, ...match, odds: match.odds ?? existing.odds } : match);
+          byId.set(key, mergeMatch(byId.get(key), match));
         }
 
         const freshMatches = Array.from(byId.values())
@@ -1229,6 +1256,8 @@ function Sportsbook({ liveOnly, matches, worldCup, loading, message, slip, setSl
     if (liveOnly) return base.filter(isInPlayMarket).sort(inPlayRank);
     return base.sort(sportsbookRank);
   }, [bettableMatches, league, liveOnly, sport]);
+  const providerBlocked = /quota|provider error|api key|missing real odds/i.test(message);
+  const emptyMessage = providerBlocked ? message : liveOnly ? "No live or starting-soon bookmaker markets" : "No bookmaker odds for this filter yet";
   const liveCount = bettableMatches.filter((match) => match.status === "live").length;
   const startingSoonCount = bettableMatches.filter((match) => match.status !== "live" && isInPlayMarket(match)).length;
   const upcomingCount = bettableMatches.length;
@@ -1265,7 +1294,7 @@ function Sportsbook({ liveOnly, matches, worldCup, loading, message, slip, setSl
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_260px]">
         <div className="space-y-3">
           {loading && <SkeletonMarkets />}
-          {!loading && visibleMatches.length === 0 && <EmptyMarkets message={liveOnly ? "No live or starting-soon bookmaker markets" : "No bookmaker odds for this filter yet"} />}
+          {!loading && visibleMatches.length === 0 && <EmptyMarkets message={emptyMessage} />}
           {visibleMatches.map((match) => (
             <MatchCard key={match.id} match={match} addPick={addPick} slip={slip} />
           ))}
