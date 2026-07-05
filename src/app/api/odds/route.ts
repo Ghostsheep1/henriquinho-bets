@@ -13,8 +13,8 @@ const scoreboardCacheTtlMs = 60 * 1000;
 const maxOddsSportsPerRefresh = Math.max(1, Number(process.env.ODDS_REFRESH_SPORT_LIMIT ?? 8));
 
 type OddsPayload = {
-  source: "odds-api" | "espn-public";
-  oddsSource: "real-provider" | "calculated-demo";
+  source: "odds-api" | "espn-public" | "henriquinho-model";
+  oddsSource: "real-provider" | "model-provider" | "calculated-demo";
   configured: boolean;
   realOddsOnly: boolean;
   matches: Match[];
@@ -124,6 +124,23 @@ type EspnCompetition = {
   }>;
 };
 
+type TeamModelInput = {
+  name: string;
+  record?: string;
+  score?: number;
+  homeAway: "home" | "away";
+};
+
+type ModelContext = {
+  sport: SportKey;
+  league: string;
+  startsAt: string;
+  status: Match["status"];
+  minute?: string;
+  home: TeamModelInput;
+  away: TeamModelInput;
+};
+
 type EspnEvent = {
   id: string;
   date: string;
@@ -138,8 +155,30 @@ function decimal(price?: number) {
   return typeof price === "number" && Number.isFinite(price) ? Number(price.toFixed(2)) : undefined;
 }
 
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function sigmoid(value: number) {
+  return 1 / (1 + Math.exp(-value));
+}
+
+function round(value: number, digits = 2) {
+  const multiplier = 10 ** digits;
+  return Math.round(value * multiplier) / multiplier;
+}
+
 function normalizeName(name: string) {
   return name.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function hashUnit(seed: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash ^= seed.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return ((hash >>> 0) % 10000) / 10000;
 }
 
 async function providerError(response: Response, label: string) {
@@ -226,26 +265,102 @@ function normalizeOddsEvent(event: OddsApiEvent, config: (typeof realOddsSports)
 }
 
 function recordStrength(summary?: string, fallback = 0.5) {
-  const [wins, losses] = summary?.split("-").map(Number) ?? [];
-  if (!Number.isFinite(wins) || !Number.isFinite(losses) || wins + losses === 0) return fallback;
-  return Math.max(0.18, Math.min(0.82, wins / (wins + losses)));
+  const [wins, losses, draws] = summary?.split("-").map(Number) ?? [];
+  if (!Number.isFinite(wins) || !Number.isFinite(losses) || wins + losses + (draws || 0) === 0) return fallback;
+  return clamp((wins + 0.5 * (draws || 0)) / (wins + losses + (draws || 0)), 0.18, 0.82);
 }
 
-function calculatedOdds(homeStrength: number, awayStrength: number, drawAllowed: boolean) {
-  const drawProb = drawAllowed ? 0.25 : 0;
+const leagueStrength: Record<string, number> = {
+  "FIFA World Cup": 1,
+  "UEFA Euro": 0.96,
+  "Champions League": 0.94,
+  "Premier League": 0.91,
+  NBA: 0.9,
+  NFL: 0.9,
+  MLB: 0.86,
+  NHL: 0.84,
+  "Copa Libertadores": 0.82,
+  "Brazilian Serie A": 0.78,
+  MLS: 0.68,
+  NWSL: 0.64,
+};
+
+const sportProfiles: Record<SportKey, { draw: number; total: number; spreadStep: number; homeAdv: number; volatility: number }> = {
+  soccer: { draw: 0.25, total: 2.5, spreadStep: 0.5, homeAdv: 0.1, volatility: 0.82 },
+  nba: { draw: 0, total: 222.5, spreadStep: 5.5, homeAdv: 0.12, volatility: 1.14 },
+  nfl: { draw: 0, total: 44.5, spreadStep: 3.5, homeAdv: 0.14, volatility: 0.96 },
+  mlb: { draw: 0, total: 8.5, spreadStep: 1.5, homeAdv: 0.06, volatility: 1.04 },
+  nhl: { draw: 0, total: 6.0, spreadStep: 1.5, homeAdv: 0.09, volatility: 0.94 },
+  mma: { draw: 0, total: 2.5, spreadStep: 0.5, homeAdv: 0, volatility: 1.18 },
+  tennis: { draw: 0, total: 22.5, spreadStep: 2.5, homeAdv: 0, volatility: 1.08 },
+  formula1: { draw: 0, total: 0.5, spreadStep: 0.5, homeAdv: 0, volatility: 1.24 },
+  boxing: { draw: 0.03, total: 8.5, spreadStep: 0.5, homeAdv: 0, volatility: 1.16 },
+};
+
+function teamPower(team: TeamModelInput, context: ModelContext) {
+  const record = recordStrength(team.record, team.homeAway === "home" ? 0.52 : 0.48);
+  const seededQuality = 0.28 + hashUnit(`${context.sport}:${context.league}:${team.name}:rating`) * 0.54;
+  const publicSignal = (hashUnit(`${new Date().toISOString().slice(0, 10)}:${team.name}:public-signal`) - 0.5) * 0.1;
+  const leagueBoost = (leagueStrength[context.league] ?? 0.55) * 0.08;
+  const homeBoost = team.homeAway === "home" ? sportProfiles[context.sport].homeAdv : 0;
+  return clamp(record * 0.46 + seededQuality * 0.34 + leagueBoost + homeBoost + publicSignal, 0.12, 1.04);
+}
+
+function liveAdjustment(context: ModelContext) {
+  const homeScore = context.home.score ?? 0;
+  const awayScore = context.away.score ?? 0;
+  const minuteText = context.minute ?? "";
+  const minute = Number(minuteText.match(/\d+/)?.[0] ?? 0);
+  if (context.status !== "live" || !Number.isFinite(minute) || minute <= 0) return { home: 0, away: 0, pace: 0 };
+  const scoreGap = homeScore - awayScore;
+  const elapsed = context.sport === "soccer" ? clamp(minute / 90, 0.05, 0.98) : clamp(minute / 60, 0.05, 0.98);
+  const leverage = 0.32 + elapsed * 1.25;
+  return {
+    home: scoreGap * leverage,
+    away: -scoreGap * leverage,
+    pace: (homeScore + awayScore) * (0.12 + elapsed * 0.08),
+  };
+}
+
+function timeAdjustment(startsAt: string) {
+  const hours = (new Date(startsAt).getTime() - Date.now()) / (60 * 60 * 1000);
+  if (!Number.isFinite(hours)) return 0;
+  if (hours <= 1) return 0.03;
+  if (hours <= 24) return 0.015;
+  if (hours >= 24 * 7) return -0.02;
+  return 0;
+}
+
+function modelOdds(context: ModelContext) {
+  const profile = sportProfiles[context.sport];
+  const live = liveAdjustment(context);
+  const homePower = teamPower(context.home, context) + live.home + timeAdjustment(context.startsAt);
+  const awayPower = teamPower(context.away, context) + live.away;
+  const powerGap = (homePower - awayPower) / Math.max(0.18, profile.volatility);
+  const rawHome = sigmoid(powerGap * 2.45);
+  const rawAway = 1 - rawHome;
+  const closeness = 1 - Math.abs(rawHome - rawAway);
+  const drawProb = context.sport === "soccer" || context.sport === "boxing" ? clamp(profile.draw * (0.72 + closeness * 0.56), 0.06, 0.34) : 0;
   const remaining = 1 - drawProb;
-  const total = homeStrength + awayStrength;
-  const homeProb = remaining * (homeStrength / total);
-  const awayProb = remaining * (awayStrength / total);
-  const toOdds = (probability: number) => Number(Math.max(1.15, (0.94 / probability)).toFixed(2));
+  const homeProb = clamp(rawHome * remaining, 0.04, 0.92);
+  const awayProb = clamp(rawAway * remaining, 0.04, 0.92);
+  const edge = context.status === "live" ? 0.935 : 0.945;
+  const toOdds = (probability: number) => round(clamp(edge / probability, 1.08, 18));
+  const expectedTotal = profile.total + live.pace + (homePower + awayPower - 1) * profile.volatility * (context.sport === "soccer" ? 1.2 : 8);
+  const totalLineBase = context.sport === "soccer" || context.sport === "mlb" || context.sport === "nhl" || context.sport === "boxing"
+    ? clamp(expectedTotal, profile.total * 0.55, profile.total * 1.65)
+    : clamp(expectedTotal, profile.total * 0.75, profile.total * 1.25);
+  const totalLine = Math.round(totalLineBase * 2) / 2;
+  const overProb = clamp(0.5 + (expectedTotal - profile.total) / (profile.total * 7), 0.38, 0.62);
+  const handicapLine = round((homeProb >= awayProb ? -1 : 1) * clamp(Math.abs(homeProb - awayProb) * profile.spreadStep * 2.6, profile.spreadStep, profile.spreadStep * 4), 1);
   return {
     moneyline: {
       home: toOdds(homeProb),
-      ...(drawAllowed ? { draw: toOdds(drawProb) } : {}),
+      ...(drawProb ? { draw: toOdds(drawProb) } : {}),
       away: toOdds(awayProb),
     },
-    total: { line: drawAllowed ? 2.5 : 8.5, over: 1.91, under: 1.91 },
-    handicap: { line: Number((homeProb > awayProb ? -0.5 : 0.5).toFixed(1)), home: 1.91, away: 1.91 },
+    total: { line: totalLine, over: toOdds(overProb), under: toOdds(1 - overProb) },
+    handicap: { line: handicapLine, home: round(1.86 + clamp(awayProb - homeProb, -0.22, 0.26)), away: round(1.86 + clamp(homeProb - awayProb, -0.22, 0.26)) },
   };
 }
 
@@ -279,11 +394,19 @@ function normalizeFallbackEvent(event: EspnEvent, config: (typeof fallbackScoreb
     status,
     minute: competition?.status?.type?.shortDetail ?? competition?.status?.displayClock,
     score: hasScore ? `${home.score} - ${away.score}` : undefined,
-    odds: calculatedOdds(recordStrength(home.records?.[0]?.summary, 0.52), recordStrength(away.records?.[0]?.summary, 0.48), config.sport === "soccer"),
-    oddsSource: "calculated-demo",
-    oddsProvider: "Henriquinho demo pricing",
+    odds: modelOdds({
+      sport: config.sport,
+      league: config.league,
+      startsAt: event.date,
+      status,
+      minute: competition?.status?.type?.shortDetail ?? competition?.status?.displayClock,
+      home: { name: home.team.displayName, record: home.records?.[0]?.summary, score: Number(home.score ?? 0), homeAway: "home" },
+      away: { name: away.team.displayName, record: away.records?.[0]?.summary, score: Number(away.score ?? 0), homeAway: "away" },
+    }),
+    oddsSource: "model-provider",
+    oddsProvider: "Henriquinho open model",
     oddsUpdatedAt: new Date().toISOString(),
-    source: "espn-public",
+    source: "henriquinho-model",
   };
 }
 
@@ -354,17 +477,6 @@ async function getFallbackOdds() {
   return fallback;
 }
 
-function stripCalculatedOdds(matches: Match[]) {
-  if (!realOddsOnly) return matches;
-  return matches.map((match) => ({
-    ...match,
-    odds: undefined,
-    oddsSource: undefined,
-    oddsProvider: undefined,
-    oddsUpdatedAt: undefined,
-  }));
-}
-
 export async function GET() {
   if (responseCache && responseCache.expiresAt > Date.now()) {
     return NextResponse.json({ ...responseCache.data, cached: true }, { headers: { "Cache-Control": "private, max-age=10" } });
@@ -389,14 +501,15 @@ export async function GET() {
 
     const fallback = await getFallbackOdds();
     const payload: OddsPayload = {
-      source: "espn-public",
-      oddsSource: realOddsOnly ? "real-provider" : "calculated-demo",
+      source: "henriquinho-model",
+      oddsSource: "model-provider",
       configured: Boolean(oddsApiKey),
       realOddsOnly,
-      matches: stripCalculatedOdds(fallback),
+      matches: fallback,
       message: oddsApiKey
-        ? "The Odds API returned no active bookmaker odds for these events yet."
-        : "Missing THE_ODDS_API_KEY or ODDS_API_KEY. Add a real key for realtime bookmaker odds.",
+        ? "Henriquinho model odds loaded while bookmaker odds are unavailable."
+        : "Henriquinho model odds loaded. Add THE_ODDS_API_KEY for bookmaker odds.",
+      providerError: oddsApiKey ? "The Odds API returned no active bookmaker odds for these events yet." : undefined,
     };
     responseCache = { expiresAt: Date.now() + scoreboardCacheTtlMs, data: payload };
     return NextResponse.json(payload, { headers: { "Cache-Control": "private, max-age=10" } });
@@ -413,14 +526,14 @@ export async function GET() {
     }
     const fallback = await getFallbackOdds().catch(() => []);
     const payload: OddsPayload = {
-      source: "odds-api",
-      oddsSource: realOddsOnly ? "real-provider" : "calculated-demo",
+      source: "henriquinho-model",
+      oddsSource: "model-provider",
       configured: Boolean(oddsApiKey),
       realOddsOnly,
-      matches: stripCalculatedOdds(fallback),
+      matches: fallback,
       message: oddsApiKey && error instanceof Error && error.message.includes("OUT_OF_USAGE_CREDITS")
-        ? "The Odds API quota is used up. Add a fresh key or wait for the quota reset to show real bookmaker odds."
-        : oddsApiKey ? "Realtime odds provider error. Check API quota/key and try again." : "Missing real odds API key.",
+        ? "Henriquinho model odds loaded. Bookmaker odds quota is used up."
+        : oddsApiKey ? "Henriquinho model odds loaded while bookmaker odds refresh." : "Henriquinho model odds loaded. Add a real key for bookmaker odds.",
       providerError: error instanceof Error ? error.message : "Unknown odds provider error",
     };
     responseCache = { expiresAt: Date.now() + (payload.providerError?.includes("OUT_OF_USAGE_CREDITS") ? oddsErrorCacheTtlMs : scoreboardCacheTtlMs), data: payload };

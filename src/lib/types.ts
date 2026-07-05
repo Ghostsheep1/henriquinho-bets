@@ -27,10 +27,10 @@ export type Match = {
     total?: { line: number; over: number; under: number };
     handicap?: { line: number; home: number; away: number };
   };
-  oddsSource?: "real-provider" | "calculated-demo";
+  oddsSource?: "real-provider" | "model-provider" | "calculated-demo";
   oddsUpdatedAt?: string;
   oddsProvider?: string;
-  source: "espn-public" | "odds-api";
+  source: "espn-public" | "odds-api" | "henriquinho-model";
 };
 
 export type BetPick = {

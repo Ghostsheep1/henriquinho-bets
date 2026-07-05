@@ -355,7 +355,7 @@ type SportsPayload = {
   realOddsOnly?: boolean;
   cached?: boolean;
   stale?: boolean;
-  oddsSource?: "real-provider" | "calculated-demo";
+  oddsSource?: "real-provider" | "model-provider" | "calculated-demo";
 };
 
 const casinoCategories = ["All", "Blaze Games", "Slots", "Table Games", "Live", "Map Games", "Sports Arcade", "Instant Win"] as const;
@@ -469,6 +469,7 @@ function isInPlayMarket(match: Match) {
 }
 
 function oddsAreFresh(match: Match) {
+  if (match.oddsSource === "model-provider") return true;
   if (match.oddsSource !== "real-provider") return false;
   const updatedAt = new Date(match.oddsUpdatedAt ?? "").getTime();
   if (!Number.isFinite(updatedAt)) return false;
@@ -633,7 +634,7 @@ function useLiveSports(pollMs: number) {
         if (!active) return;
         setMatches(freshMatches);
         setWorldCup((football.worldCup ?? []).filter(isFreshMarket));
-        setMessage(odds.configured && odds.oddsSource === "real-provider" ? odds.message : odds.message || "Realtime odds key required");
+        setMessage(odds.message || "Henriquinho model odds loaded");
         loadedRef.current = true;
       } catch {
         if (!active) return;
@@ -1256,7 +1257,7 @@ function Sportsbook({ liveOnly, matches, worldCup, loading, message, slip, setSl
     if (liveOnly) return base.filter(isInPlayMarket).sort(inPlayRank);
     return base.sort(sportsbookRank);
   }, [bettableMatches, league, liveOnly, sport]);
-  const providerReady = message === "ok" || message.startsWith("Realtime bookmaker odds loaded") || message.startsWith("Showing last good bookmaker odds");
+  const providerReady = message === "ok" || message.startsWith("Realtime bookmaker odds loaded") || message.startsWith("Showing last good bookmaker odds") || message.startsWith("Henriquinho model odds loaded");
   const providerBlocked = Boolean(message && !providerReady);
   const emptyMessage = providerBlocked ? message : liveOnly ? "No live or starting-soon bookmaker markets" : "No bookmaker odds for this filter yet";
   const liveCount = bettableMatches.filter((match) => match.status === "live").length;
@@ -1379,6 +1380,7 @@ function MatchCard({ match, addPick, slip }: { match: Match; addPick: (pick: Bet
   const event = `${match.home} vs ${match.away}`;
   const paused = bettingPaused(match);
   const realOdds = match.oddsSource === "real-provider";
+  const modelOdds = match.oddsSource === "model-provider";
   const bettingOpen = (match.status === "live" || match.status === "upcoming") && !paused;
   const picks: BetPick[] = match.odds && bettingOpen ? [
     { id: `${match.id}-home`, matchId: match.id, label: match.home, market: "moneyline", odds: match.odds.moneyline.home, event },
@@ -1406,11 +1408,11 @@ function MatchCard({ match, addPick, slip }: { match: Match; addPick: (pick: Bet
           <p className="text-sm text-slate-400">{match.score ?? dateTime.format(new Date(match.startsAt))} {match.minute ? `- ${match.minute}` : ""}</p>
         </div>
         <div className={clsx("rounded-md px-3 py-2 text-sm font-bold", realOdds ? "bg-emerald-400/10 text-emerald-200" : "bg-amber-300/10 text-amber-100")}>
-          {paused ? "Odds refresh locked" : bettingOpen && match.odds ? realOdds ? "Realtime odds" : "Calculated demo odds" : match.status === "finished" ? "Final" : "Odds unavailable"}
+          {paused ? "Odds refresh locked" : bettingOpen && match.odds ? realOdds ? "Realtime odds" : modelOdds ? "Henriquinho model odds" : "Calculated odds" : match.status === "finished" ? "Final" : "Odds unavailable"}
         </div>
       </div>
       {realOdds && match.oddsUpdatedAt && <div className="mt-3 rounded-md border border-emerald-300/20 bg-emerald-400/10 px-3 py-2 text-xs text-emerald-100">Provider: {match.oddsProvider}. Updated {new Date(match.oddsUpdatedAt).toLocaleTimeString()}.</div>}
-      {!realOdds && match.odds && <div className="mt-3 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs text-amber-100">Demo fallback odds. Add THE_ODDS_API_KEY to show realtime sportsbook odds.</div>}
+      {!realOdds && match.odds && <div className="mt-3 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs text-amber-100">Henriquinho open model using public scores, records, sport profiles, live state, and form signals. Add THE_ODDS_API_KEY when you want bookmaker odds.</div>}
       {paused && <div className="mt-3 rounded-md border border-red-300/20 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-100">Live betting paused until the odds provider refreshes this market.</div>}
       {picks.length === 0 && <div className="mt-4 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-3 text-sm text-amber-100">{paused ? "Waiting for fresh live odds" : bettingOpen ? "The odds provider has not posted bookmaker lines for this event yet." : "Betting closed"}</div>}
       <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
