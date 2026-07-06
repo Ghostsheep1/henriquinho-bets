@@ -1414,13 +1414,6 @@ function MatchCard({ match, addPick, slip }: { match: Match; addPick: (pick: Bet
         </div>
       </div>
       {realOdds && match.oddsUpdatedAt && <div className="mt-3 rounded-md border border-emerald-300/20 bg-emerald-400/10 px-3 py-2 text-xs text-emerald-100">Provider: {match.oddsProvider}. Updated {new Date(match.oddsUpdatedAt).toLocaleTimeString()}.</div>}
-      {!realOdds && match.odds && (
-        <div className="mt-3 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs text-amber-100">
-          {match.model
-            ? `${match.model.version} using ${match.model.signals.slice(0, 4).join(", ")}. Confidence ${Math.round(match.model.confidence * 100)}%, margin ${Math.round(match.model.margin * 1000) / 10}%, max ${currency.format(match.risk?.maxStake ?? 0)}.`
-            : "Henriquinho open model using public scores, records, sport profiles, live state, and form signals."} Add THE_ODDS_API_KEY when you want bookmaker odds.
-        </div>
-      )}
       {paused && <div className="mt-3 rounded-md border border-red-300/20 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-100">{match.trader?.suspended ? `Market suspended${match.trader.note ? `: ${match.trader.note}` : ""}` : "Live betting paused until the odds provider refreshes this market."}</div>}
       {picks.length === 0 && <div className="mt-4 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-3 text-sm text-amber-100">{paused ? "Waiting for fresh live odds" : bettingOpen ? "The odds provider has not posted bookmaker lines for this event yet." : "Betting closed"}</div>}
       <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
