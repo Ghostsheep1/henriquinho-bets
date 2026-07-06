@@ -6,6 +6,8 @@ export const revalidate = 0;
 
 const oddsApiKeyRaw = (process.env.THE_ODDS_API_KEY ?? process.env.ODDS_API_KEY ?? "").trim();
 const oddsApiKey = oddsApiKeyRaw && !oddsApiKeyRaw.includes("your-") ? oddsApiKeyRaw : undefined;
+const apiFootballKeyRaw = (process.env.API_FOOTBALL_KEY ?? "").trim();
+const apiFootballKey = apiFootballKeyRaw && !apiFootballKeyRaw.includes("your-") ? apiFootballKeyRaw : undefined;
 const realOddsOnly = process.env.REAL_ODDS_ONLY !== "false";
 const oddsCacheTtlMs = 5 * 60 * 1000;
 const oddsErrorCacheTtlMs = 60 * 60 * 1000;
@@ -33,6 +35,8 @@ let lastGoodRealOdds: OddsPayload | null = null;
 let activeSportsCache: CacheEntry<Set<string>> | null = null;
 let fallbackCache: CacheEntry<Match[]> | null = null;
 let licensedSignalsCache: CacheEntry<{ records: Record<LicensedFeedKind, LicensedFeedRecord[]>; status: FeedStatus; traderControls: TraderControls }> | null = null;
+let apiFootballFixtureCache: CacheEntry<ApiFootballFixture[]> | null = null;
+let apiFootballStatsCache: CacheEntry<Map<number, NonNullable<Match["liveStats"]>>> | null = null;
 
 const realOddsSports: Array<{ key: string; sport: SportKey; league: string; country: string }> = [
   { key: "soccer_fifa_world_cup", sport: "soccer", league: "FIFA World Cup", country: "World" },
@@ -147,7 +151,7 @@ type ModelContext = {
 
 type ModelPricing = {
   odds: NonNullable<Match["odds"]>;
-  liveStats: NonNullable<Match["liveStats"]>;
+  liveStats?: NonNullable<Match["liveStats"]>;
   meta: NonNullable<Match["model"]>;
   risk: NonNullable<Match["risk"]>;
   trader: NonNullable<Match["trader"]>;
@@ -227,6 +231,18 @@ type EspnEvent = {
     status?: { type?: { state?: string; completed?: boolean; shortDetail?: string }; displayClock?: string };
     competitors?: EspnCompetition["competitors"];
   }>;
+};
+
+type ApiFootballFixture = {
+  fixture?: { id?: number; date?: string; status?: { short?: string; elapsed?: number | null } };
+  teams?: { home?: { name?: string }; away?: { name?: string } };
+  goals?: { home?: number | null; away?: number | null };
+  statistics?: ApiFootballTeamStatistics[];
+};
+
+type ApiFootballTeamStatistics = {
+  team?: { name?: string };
+  statistics?: Array<{ type?: string; value?: string | number | null }>;
 };
 
 function decimal(price?: number) {
@@ -424,17 +440,6 @@ function normalizeHeatmap(values?: number[]) {
   return cells.map((value) => Math.round((value / max) * 100));
 }
 
-function estimatedHeatmap(seed: string, attackingBias: number) {
-  return Array.from({ length: 15 }, (_, index) => {
-    const row = Math.floor(index / 5);
-    const lane = index % 5;
-    const attackWeight = 0.65 + row * 0.22 + attackingBias * 0.4;
-    const centralWeight = 1 - Math.abs(lane - 2) * 0.12;
-    const noise = 0.82 + hashUnit(`${seed}:${index}`) * 0.36;
-    return Math.round(clamp(attackWeight * centralWeight * noise * 55, 8, 100));
-  });
-}
-
 function marketCycle(startsAt: string) {
   const starts = new Date(startsAt).getTime();
   const base = Number.isFinite(starts) ? starts : Date.now();
@@ -529,6 +534,23 @@ function normalizeOddsEvent(event: OddsApiEvent, config: (typeof realOddsSports)
   };
 }
 
+function stripEstimatedMarkets(match: Match): Match {
+  return {
+    id: match.id.replace(/^espn-/, "scoreboard-"),
+    sport: match.sport,
+    league: match.league,
+    country: match.country,
+    home: match.home,
+    away: match.away,
+    startsAt: match.startsAt,
+    status: match.status,
+    minute: match.minute,
+    score: match.score,
+    liveStats: match.liveStats,
+    source: "espn-public",
+  };
+}
+
 function recordStrength(summary?: string, fallback = 0.5) {
   const [wins, losses, draws] = summary?.split("-").map(Number) ?? [];
   if (!Number.isFinite(wins) || !Number.isFinite(losses) || wins + losses + (draws || 0) === 0) return fallback;
@@ -596,44 +618,6 @@ function timeAdjustment(startsAt: string) {
   return 0;
 }
 
-function matchMinuteRatio(context: ModelContext) {
-  if (context.status !== "live") return context.status === "finished" ? 1 : 0.12;
-  const minute = Number((context.minute ?? "").match(/\d+/)?.[0] ?? 0);
-  if (!Number.isFinite(minute) || minute <= 0) return 0.18;
-  return clamp(minute / (context.sport === "soccer" ? 90 : 60), 0.08, 1);
-}
-
-function modelLiveStats(context: ModelContext, homePower: number, awayPower: number, homeProb: number, awayProb: number): NonNullable<Match["liveStats"]> {
-  if (context.external.stats) return context.external.stats;
-  const ratio = matchMinuteRatio(context);
-  const possessionHome = clamp(50 + (homePower - awayPower) * 24 + (hashUnit(`${context.home.name}:possession`) - 0.5) * 5, 34, 66);
-  const possessionAway = 100 - possessionHome;
-  const scoreTotal = (context.home.score ?? 0) + (context.away.score ?? 0);
-  const xgBase = context.sport === "soccer" ? 1.45 : context.sport === "nhl" ? 2.8 : 3.2;
-  const homeXg = round(clamp((xgBase * ratio * (0.72 + homeProb)) + (context.home.score ?? 0) * 0.18, 0.05, 4.8));
-  const awayXg = round(clamp((xgBase * ratio * (0.72 + awayProb)) + (context.away.score ?? 0) * 0.18, 0.05, 4.8));
-  const shotsHome = Math.max(1, Math.round(homeXg * 4.8 + ratio * 4 + hashUnit(`${context.home.name}:shots`) * 3));
-  const shotsAway = Math.max(1, Math.round(awayXg * 4.8 + ratio * 4 + hashUnit(`${context.away.name}:shots`) * 3));
-  const sotHome = Math.max(0, Math.round(shotsHome * clamp(0.32 + homeProb * 0.16, 0.28, 0.52)));
-  const sotAway = Math.max(0, Math.round(shotsAway * clamp(0.32 + awayProb * 0.16, 0.28, 0.52)));
-  const momentumHome = clamp(possessionHome * 0.45 + homeProb * 40 + ((context.home.score ?? 0) - (context.away.score ?? 0)) * 7 + scoreTotal * 0.8, 6, 94);
-  const momentumAway = clamp(100 - momentumHome + (hashUnit(`${context.away.name}:momentum`) - 0.5) * 6, 6, 94);
-  return {
-    source: "model-estimate",
-    possession: { home: Math.round(possessionHome), away: Math.round(possessionAway) },
-    xg: { home: homeXg, away: awayXg },
-    shots: { home: shotsHome, away: shotsAway },
-    shotsOnTarget: { home: sotHome, away: sotAway },
-    dangerousAttacks: { home: Math.round(momentumHome * ratio * 1.55), away: Math.round(momentumAway * ratio * 1.55) },
-    corners: { home: Math.round(homeXg * 1.7 + ratio * 2), away: Math.round(awayXg * 1.7 + ratio * 2) },
-    momentum: { home: Math.round(momentumHome), away: Math.round(momentumAway) },
-    heatmap: {
-      home: normalizeHeatmap(estimatedHeatmap(`${context.home.name}:${context.startsAt}`, homeProb - awayProb)),
-      away: normalizeHeatmap(estimatedHeatmap(`${context.away.name}:${context.startsAt}`, awayProb - homeProb).reverse()),
-    },
-  };
-}
-
 function modelConfidence(context: ModelContext, closeness: number) {
   const hasHomeRecord = Boolean(context.home.record);
   const hasAwayRecord = Boolean(context.away.record);
@@ -663,11 +647,15 @@ function modelOdds(context: ModelContext): ModelPricing {
     : [clamp(rawHome, 0.04, 0.92), 0, clamp(rawAway, 0.04, 0.92)];
   const confidence = modelConfidence(context, closeness);
   const dataQuality = clamp(confidence + (context.home.record && context.away.record ? 0.04 : -0.06) + context.external.dataQualityBoost, 0.28, 0.98);
-  const liveStats = modelLiveStats(context, homePower, awayPower, homeProb, awayProb);
+  const liveStats = context.external.stats;
   const calibrationDiscount = context.external.calibrationSampleSize > 50 ? (context.external.closingLineScore - 0.5) * 0.025 : 0;
   const margin = round(clamp(0.045 + (1 - confidence) * 0.045 + (context.status === "live" ? 0.012 : 0) + context.external.marginBoost - calibrationDiscount, 0.035, 0.14), 3);
   const toOdds = (probability: number) => round(clamp(1 / (probability * (1 + margin)), 1.08, 18));
-  const statsPressure = context.sport === "soccer" ? (liveStats.xg.home + liveStats.xg.away - 2.4) * 0.35 : (liveStats.shotsOnTarget.home + liveStats.shotsOnTarget.away) * 0.03;
+  const statsPressure = liveStats
+    ? context.sport === "soccer" && liveStats.xg
+      ? (liveStats.xg.home + liveStats.xg.away - 2.4) * 0.35
+      : (liveStats.shotsOnTarget.home + liveStats.shotsOnTarget.away) * 0.03
+    : 0;
   const expectedTotal = profile.total + live.pace + statsPressure + (homePower + awayPower - 1) * profile.volatility * (context.sport === "soccer" ? 1.2 : 8);
   const totalLineBase = context.sport === "soccer" || context.sport === "mlb" || context.sport === "nhl" || context.sport === "boxing"
     ? clamp(expectedTotal, profile.total * 0.55, profile.total * 1.65)
@@ -699,7 +687,7 @@ function modelOdds(context: ModelContext): ModelPricing {
         "home-advantage",
         "time-to-start",
         "five-minute-line-movement",
-        "xg-possession-momentum",
+        ...(liveStats ? ["verified-live-stats"] : []),
         context.status === "live" ? "live-score-state" : "pre-match-state",
         ...context.external.feedSignals,
       ],
@@ -729,7 +717,137 @@ function dateKeys() {
   });
 }
 
-function normalizeFallbackEvent(event: EspnEvent, config: (typeof fallbackScoreboardEndpoints)[number], licensed: Awaited<ReturnType<typeof getLicensedSignals>>): Match | null {
+function isoDateKey(date: string) {
+  const parsed = new Date(date);
+  if (!Number.isFinite(parsed.getTime())) return "";
+  return parsed.toISOString().slice(0, 10);
+}
+
+function teamSimilarity(a = "", b = "") {
+  const first = normalizeName(a);
+  const second = normalizeName(b);
+  if (!first || !second) return 0;
+  if (first === second) return 1;
+  if (first.includes(second) || second.includes(first)) return 0.88;
+  const chunks: string[][] = [first, second].map((value) => value.match(/[a-z]+|\d+/g) ?? []);
+  const shared = chunks[0].filter((chunk) => chunks[1].includes(chunk)).length;
+  return shared / Math.max(1, Math.max(chunks[0].length, chunks[1].length));
+}
+
+function statNumber(value: string | number | null | undefined) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  if (!value) return 0;
+  const parsed = Number(String(value).replace("%", "").trim());
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function statValue(teamStats: ApiFootballTeamStatistics | undefined, label: string) {
+  const key = normalizeName(label);
+  const item = teamStats?.statistics?.find((stat) => normalizeName(stat.type ?? "") === key);
+  return statNumber(item?.value);
+}
+
+async function apiFootballFetch<T>(path: string, params: Record<string, string>) {
+  if (!apiFootballKey) return null;
+  const url = new URL(`https://v3.football.api-sports.io/${path}`);
+  Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: { "x-apisports-key": apiFootballKey },
+  });
+  if (!response.ok) return null;
+  return (await response.json()) as { response?: T };
+}
+
+async function getApiFootballLiveFixtures() {
+  if (!apiFootballKey) return [];
+  if (apiFootballFixtureCache && apiFootballFixtureCache.expiresAt > Date.now()) return apiFootballFixtureCache.data;
+  const payload = await apiFootballFetch<ApiFootballFixture[]>("fixtures", { live: "all" });
+  const fixtures = payload?.response ?? [];
+  apiFootballFixtureCache = { expiresAt: Date.now() + scoreboardCacheTtlMs, data: fixtures };
+  return fixtures;
+}
+
+function normalizeApiFootballStats(fixture: ApiFootballFixture, stats: ApiFootballTeamStatistics[]) {
+  const homeName = fixture.teams?.home?.name ?? "";
+  const awayName = fixture.teams?.away?.name ?? "";
+  const homeStats = stats.find((item) => teamSimilarity(item.team?.name, homeName) > 0.7) ?? stats[0];
+  const awayStats = stats.find((item) => teamSimilarity(item.team?.name, awayName) > 0.7) ?? stats[1];
+  if (!homeStats || !awayStats) return null;
+
+  const possessionHome = clamp(statValue(homeStats, "Ball Possession"), 0, 100);
+  const possessionAway = clamp(statValue(awayStats, "Ball Possession"), 0, 100);
+  const xgHome = statValue(homeStats, "expected_goals") || statValue(homeStats, "Expected Goals");
+  const xgAway = statValue(awayStats, "expected_goals") || statValue(awayStats, "Expected Goals");
+  const shotsHome = Math.round(statValue(homeStats, "Total Shots"));
+  const shotsAway = Math.round(statValue(awayStats, "Total Shots"));
+  const shotsOnTargetHome = Math.round(statValue(homeStats, "Shots on Goal"));
+  const shotsOnTargetAway = Math.round(statValue(awayStats, "Shots on Goal"));
+  const dangerousHome = Math.round(statValue(homeStats, "Dangerous Attacks"));
+  const dangerousAway = Math.round(statValue(awayStats, "Dangerous Attacks"));
+  const cornersHome = Math.round(statValue(homeStats, "Corner Kicks"));
+  const cornersAway = Math.round(statValue(awayStats, "Corner Kicks"));
+  const pressureTotal = Math.max(1, shotsHome + shotsAway + dangerousHome + dangerousAway + cornersHome + cornersAway);
+  const homePressure = (shotsHome + dangerousHome + cornersHome * 2) / pressureTotal;
+  const momentumHome = Math.round(clamp(possessionHome * 0.35 + homePressure * 65, 0, 100));
+  const momentumAway = Math.round(clamp(100 - momentumHome, 0, 100));
+  const heatmapHome = Array.isArray((homeStats as { heatmap?: number[] }).heatmap) ? normalizeHeatmap((homeStats as { heatmap?: number[] }).heatmap) : undefined;
+  const heatmapAway = Array.isArray((awayStats as { heatmap?: number[] }).heatmap) ? normalizeHeatmap((awayStats as { heatmap?: number[] }).heatmap) : undefined;
+
+  if (possessionHome + possessionAway <= 0 && shotsHome + shotsAway <= 0 && cornersHome + cornersAway <= 0) return null;
+
+  return {
+    source: "api-football" as const,
+    possession: { home: Math.round(possessionHome), away: Math.round(possessionAway) },
+    ...(xgHome || xgAway ? { xg: { home: round(xgHome), away: round(xgAway) } } : {}),
+    shots: { home: Math.max(0, shotsHome), away: Math.max(0, shotsAway) },
+    shotsOnTarget: { home: Math.max(0, shotsOnTargetHome), away: Math.max(0, shotsOnTargetAway) },
+    dangerousAttacks: { home: Math.max(0, dangerousHome), away: Math.max(0, dangerousAway) },
+    corners: { home: Math.max(0, cornersHome), away: Math.max(0, cornersAway) },
+    momentum: { home: momentumHome, away: momentumAway },
+    ...(heatmapHome && heatmapAway ? { heatmap: { home: heatmapHome, away: heatmapAway } } : {}),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+async function getApiFootballLiveStats() {
+  if (!apiFootballKey) return new Map<number, NonNullable<Match["liveStats"]>>();
+  if (apiFootballStatsCache && apiFootballStatsCache.expiresAt > Date.now()) return apiFootballStatsCache.data;
+  const fixtures = await getApiFootballLiveFixtures();
+  const liveFixtures = fixtures.filter((fixture) => fixture.fixture?.id);
+  const maxStatCalls = Math.max(1, Number(process.env.API_FOOTBALL_STATS_REFRESH_LIMIT ?? 8));
+  const entries = await Promise.all(
+    liveFixtures.slice(0, maxStatCalls).map(async (fixture) => {
+      const fixtureId = fixture.fixture?.id;
+      if (!fixtureId) return null;
+      const payload = await apiFootballFetch<ApiFootballTeamStatistics[]>("fixtures/statistics", { fixture: String(fixtureId) });
+      const stats = normalizeApiFootballStats(fixture, payload?.response ?? []);
+      return stats ? ([fixtureId, stats] as const) : null;
+    }),
+  );
+  const mapped = new Map<number, NonNullable<Match["liveStats"]>>();
+  for (const entry of entries) {
+    if (entry) mapped.set(entry[0], entry[1]);
+  }
+  apiFootballStatsCache = { expiresAt: Date.now() + scoreboardCacheTtlMs, data: mapped };
+  return mapped;
+}
+
+async function findApiFootballStatsForMatch(home: string, away: string, startsAt: string, status: Match["status"]) {
+  if (!apiFootballKey || status !== "live") return undefined;
+  const fixtures = await getApiFootballLiveFixtures();
+  const eventDate = isoDateKey(startsAt);
+  const fixture = fixtures.find((item) => {
+    const fixtureDate = isoDateKey(item.fixture?.date ?? "");
+    if (fixtureDate && eventDate && fixtureDate !== eventDate) return false;
+    return teamSimilarity(item.teams?.home?.name, home) > 0.72 && teamSimilarity(item.teams?.away?.name, away) > 0.72;
+  });
+  const fixtureId = fixture?.fixture?.id;
+  if (!fixtureId) return undefined;
+  return (await getApiFootballLiveStats()).get(fixtureId);
+}
+
+async function normalizeFallbackEvent(event: EspnEvent, config: (typeof fallbackScoreboardEndpoints)[number], licensed: Awaited<ReturnType<typeof getLicensedSignals>>): Promise<Match | null> {
   const competition = event.competitions?.[0];
   const competitors = competition?.competitors ?? [];
   const home = competitors.find((item) => item.homeAway === "home");
@@ -740,6 +858,8 @@ function normalizeFallbackEvent(event: EspnEvent, config: (typeof fallbackScoreb
   const startsAt = new Date(event.date).getTime();
   if (Number.isFinite(startsAt) && startsAt < Date.now() - stalePastWindowMs && status !== "live") return null;
   const hasScore = home.score !== undefined && away.score !== undefined && (status === "live" || status === "finished");
+  const external = externalSignalsForEvent(event.id, home.team.displayName, away.team.displayName, licensed);
+  external.stats = external.stats ?? await findApiFootballStatsForMatch(home.team.displayName, away.team.displayName, event.date, status);
   const pricing = modelOdds({
     sport: config.sport,
     league: config.league,
@@ -748,7 +868,7 @@ function normalizeFallbackEvent(event: EspnEvent, config: (typeof fallbackScoreb
     minute: competition?.status?.type?.shortDetail ?? competition?.status?.displayClock,
     home: { name: home.team.displayName, record: home.records?.[0]?.summary, score: Number(home.score ?? 0), homeAway: "home" },
     away: { name: away.team.displayName, record: away.records?.[0]?.summary, score: Number(away.score ?? 0), homeAway: "away" },
-    external: externalSignalsForEvent(event.id, home.team.displayName, away.team.displayName, licensed),
+    external,
   });
   return {
     id: `espn-${config.sport}-${event.id}`,
@@ -833,7 +953,8 @@ async function getFallbackOdds() {
       );
       const byId = new Map<string, EspnEvent>();
       payloads.flat().forEach((event) => byId.set(event.id, event));
-      return Array.from(byId.values()).map((event) => normalizeFallbackEvent(event, config, licensed)).filter(Boolean) as Match[];
+      const normalized = await Promise.all(Array.from(byId.values()).map((event) => normalizeFallbackEvent(event, config, licensed)));
+      return normalized.filter(Boolean) as Match[];
     }),
   );
   const fallback = results.flat();
@@ -864,13 +985,16 @@ export async function GET() {
     }
 
     const fallback = await getFallbackOdds();
+    const matches = realOddsOnly ? fallback.map(stripEstimatedMarkets) : fallback;
     const payload: OddsPayload = {
-      source: "henriquinho-model",
-      oddsSource: "model-provider",
+      source: realOddsOnly ? "espn-public" : "henriquinho-model",
+      oddsSource: realOddsOnly ? "real-provider" : "model-provider",
       configured: Boolean(oddsApiKey),
       realOddsOnly,
-      matches: fallback,
-      message: oddsApiKey
+      matches,
+      message: realOddsOnly
+        ? "No bookmaker odds are available right now. Showing real scoreboard events only."
+        : oddsApiKey
         ? "Henriquinho model odds loaded while bookmaker odds are unavailable."
         : "Henriquinho model odds loaded. Add THE_ODDS_API_KEY for bookmaker odds.",
       providerError: oddsApiKey ? "The Odds API returned no active bookmaker odds for these events yet." : undefined,
@@ -889,13 +1013,16 @@ export async function GET() {
       return NextResponse.json(payload, { headers: { "Cache-Control": "private, max-age=10" } });
     }
     const fallback = await getFallbackOdds().catch(() => []);
+    const matches = realOddsOnly ? fallback.map(stripEstimatedMarkets) : fallback;
     const payload: OddsPayload = {
-      source: "henriquinho-model",
-      oddsSource: "model-provider",
+      source: realOddsOnly ? "espn-public" : "henriquinho-model",
+      oddsSource: realOddsOnly ? "real-provider" : "model-provider",
       configured: Boolean(oddsApiKey),
       realOddsOnly,
-      matches: fallback,
-      message: oddsApiKey && error instanceof Error && error.message.includes("OUT_OF_USAGE_CREDITS")
+      matches,
+      message: realOddsOnly
+        ? "Bookmaker odds are unavailable. Showing real scoreboard events only."
+        : oddsApiKey && error instanceof Error && error.message.includes("OUT_OF_USAGE_CREDITS")
         ? "Henriquinho model odds loaded. Bookmaker odds quota is used up."
         : oddsApiKey ? "Henriquinho model odds loaded while bookmaker odds refresh." : "Henriquinho model odds loaded. Add a real key for bookmaker odds.",
       providerError: error instanceof Error ? error.message : "Unknown odds provider error",
