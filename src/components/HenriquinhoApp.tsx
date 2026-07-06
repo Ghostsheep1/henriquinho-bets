@@ -1416,6 +1416,7 @@ function MatchCard({ match, addPick, slip }: { match: Match; addPick: (pick: Bet
       {realOdds && match.oddsUpdatedAt && <div className="mt-3 rounded-md border border-emerald-300/20 bg-emerald-400/10 px-3 py-2 text-xs text-emerald-100">Provider: {match.oddsProvider}. Updated {new Date(match.oddsUpdatedAt).toLocaleTimeString()}.</div>}
       {paused && <div className="mt-3 rounded-md border border-red-300/20 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-100">{match.trader?.suspended ? `Market suspended${match.trader.note ? `: ${match.trader.note}` : ""}` : "Live betting paused until the odds provider refreshes this market."}</div>}
       {picks.length === 0 && <div className="mt-4 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-3 text-sm text-amber-100">{paused ? "Waiting for fresh live odds" : bettingOpen ? "The odds provider has not posted bookmaker lines for this event yet." : "Betting closed"}</div>}
+      {match.liveStats && <LiveStatsPanel match={match} />}
       <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {picks.map((pick) => {
           const selected = slip.some((item) => item.id === pick.id);
@@ -1428,6 +1429,41 @@ function MatchCard({ match, addPick, slip }: { match: Match; addPick: (pick: Bet
         })}
       </div>
     </article>
+  );
+}
+
+function LiveStatsPanel({ match }: { match: Match }) {
+  const stats = match.liveStats;
+  if (!stats) return null;
+  return (
+    <div className="mt-3 rounded-md border border-white/10 bg-white/[0.03] p-3">
+      <div className="mb-2 flex items-center justify-between gap-2 text-[11px] uppercase text-slate-500">
+        <span>{stats.source === "licensed-feed" ? "Live stats feed" : "AI live stats model"}</span>
+        <span>{match.status === "live" ? "Updating live" : "Pre-match projection"}</span>
+      </div>
+      <div className="grid gap-3 md:grid-cols-[1fr_120px]">
+        <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+          <StatPill label="Poss" home={stats.possession.home} away={stats.possession.away} suffix="%" />
+          <StatPill label="xG" home={stats.xg.home} away={stats.xg.away} />
+          <StatPill label="SOT" home={stats.shotsOnTarget.home} away={stats.shotsOnTarget.away} />
+          <StatPill label="Mom" home={stats.momentum.home} away={stats.momentum.away} />
+        </div>
+        <div className="grid grid-cols-5 gap-1" aria-label="Match heatmap">
+          {stats.heatmap.home.slice(0, 15).map((value, index) => (
+            <span key={index} className="h-3 rounded-sm bg-emerald-400" style={{ opacity: 0.18 + value / 130 }} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StatPill({ label, home, away, suffix = "" }: { label: string; home: number; away: number; suffix?: string }) {
+  return (
+    <div className="rounded bg-black/25 px-2 py-2">
+      <div className="text-[10px] uppercase text-slate-500">{label}</div>
+      <div className="font-black text-slate-100">{home}{suffix} - {away}{suffix}</div>
+    </div>
   );
 }
 

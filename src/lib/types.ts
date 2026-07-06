@@ -30,6 +30,17 @@ export type Match = {
   oddsSource?: "real-provider" | "model-provider" | "calculated-demo";
   oddsUpdatedAt?: string;
   oddsProvider?: string;
+  liveStats?: {
+    source: "licensed-feed" | "model-estimate";
+    possession: { home: number; away: number };
+    xg: { home: number; away: number };
+    shots: { home: number; away: number };
+    shotsOnTarget: { home: number; away: number };
+    dangerousAttacks: { home: number; away: number };
+    corners: { home: number; away: number };
+    momentum: { home: number; away: number };
+    heatmap: { home: number[]; away: number[] };
+  };
   model?: {
     version: string;
     confidence: number;

@@ -147,12 +147,13 @@ type ModelContext = {
 
 type ModelPricing = {
   odds: NonNullable<Match["odds"]>;
+  liveStats: NonNullable<Match["liveStats"]>;
   meta: NonNullable<Match["model"]>;
   risk: NonNullable<Match["risk"]>;
   trader: NonNullable<Match["trader"]>;
 };
 
-type LicensedFeedKind = "injury" | "news" | "sharp" | "history";
+type LicensedFeedKind = "injury" | "news" | "sharp" | "history" | "stats";
 type FeedStatus = Record<LicensedFeedKind, "active" | "missing" | "error">;
 type LicensedFeedRecord = {
   eventId?: string;
@@ -165,6 +166,22 @@ type LicensedFeedRecord = {
   confidence?: number;
   closingLineScore?: number;
   sampleSize?: number;
+  possessionHome?: number;
+  possessionAway?: number;
+  xgHome?: number;
+  xgAway?: number;
+  shotsHome?: number;
+  shotsAway?: number;
+  shotsOnTargetHome?: number;
+  shotsOnTargetAway?: number;
+  dangerousAttacksHome?: number;
+  dangerousAttacksAway?: number;
+  cornersHome?: number;
+  cornersAway?: number;
+  momentumHome?: number;
+  momentumAway?: number;
+  heatmapHome?: number[];
+  heatmapAway?: number[];
   headline?: string;
   note?: string;
 };
@@ -199,6 +216,7 @@ type ExternalSignals = {
   closingLineScore: number;
   calibrationSampleSize: number;
   traderControlled: boolean;
+  stats?: NonNullable<Match["liveStats"]>;
 };
 
 type EspnEvent = {
@@ -242,7 +260,7 @@ function hashUnit(seed: string) {
 }
 
 function emptyFeedStatus(): FeedStatus {
-  return { injury: "missing", news: "missing", sharp: "missing", history: "missing" };
+  return { injury: "missing", news: "missing", sharp: "missing", history: "missing", stats: "missing" };
 }
 
 function emptyExternalSignals(feedStatus: FeedStatus = emptyFeedStatus()): ExternalSignals {
@@ -305,10 +323,10 @@ async function fetchLicensedFeed(kind: LicensedFeedKind) {
 
 async function getLicensedSignals() {
   if (licensedSignalsCache && licensedSignalsCache.expiresAt > Date.now()) return licensedSignalsCache.data;
-  const kinds: LicensedFeedKind[] = ["injury", "news", "sharp", "history"];
+  const kinds: LicensedFeedKind[] = ["injury", "news", "sharp", "history", "stats"];
   const results = await Promise.all(kinds.map(async (kind) => [kind, await fetchLicensedFeed(kind)] as const));
   const status = emptyFeedStatus();
-  const records: Record<LicensedFeedKind, LicensedFeedRecord[]> = { injury: [], news: [], sharp: [], history: [] };
+  const records: Record<LicensedFeedKind, LicensedFeedRecord[]> = { injury: [], news: [], sharp: [], history: [], stats: [] };
   for (const [kind, result] of results) {
     status[kind] = result.status;
     records[kind] = result.records;
@@ -339,6 +357,7 @@ function externalSignalsForEvent(eventId: string, home: string, away: string, li
     ["news", "licensed-news-feed"],
     ["sharp", "sharp-market-feed"],
     ["history", "closing-line-history"],
+    ["stats", "licensed-live-stats"],
   ];
 
   for (const [kind, signal] of feedNames) {
@@ -350,6 +369,22 @@ function externalSignalsForEvent(eventId: string, home: string, away: string, li
       external.dataQualityBoost += 0.04;
       if (record.closingLineScore !== undefined) external.closingLineScore = clamp(record.closingLineScore, 0, 1);
       if (record.sampleSize !== undefined) external.calibrationSampleSize = Math.max(external.calibrationSampleSize, record.sampleSize);
+      if (kind === "stats" && record.possessionHome !== undefined && record.possessionAway !== undefined) {
+        external.stats = {
+          source: "licensed-feed",
+          possession: { home: clamp(record.possessionHome, 0, 100), away: clamp(record.possessionAway, 0, 100) },
+          xg: { home: round(record.xgHome ?? 0), away: round(record.xgAway ?? 0) },
+          shots: { home: Math.max(0, Math.round(record.shotsHome ?? 0)), away: Math.max(0, Math.round(record.shotsAway ?? 0)) },
+          shotsOnTarget: { home: Math.max(0, Math.round(record.shotsOnTargetHome ?? 0)), away: Math.max(0, Math.round(record.shotsOnTargetAway ?? 0)) },
+          dangerousAttacks: { home: Math.max(0, Math.round(record.dangerousAttacksHome ?? 0)), away: Math.max(0, Math.round(record.dangerousAttacksAway ?? 0)) },
+          corners: { home: Math.max(0, Math.round(record.cornersHome ?? 0)), away: Math.max(0, Math.round(record.cornersAway ?? 0)) },
+          momentum: { home: clamp(record.momentumHome ?? 50, 0, 100), away: clamp(record.momentumAway ?? 50, 0, 100) },
+          heatmap: {
+            home: normalizeHeatmap(record.heatmapHome),
+            away: normalizeHeatmap(record.heatmapAway),
+          },
+        };
+      }
       if (!external.feedSignals.includes(signal)) external.feedSignals.push(signal);
     }
   }
@@ -381,6 +416,23 @@ function normalizeProbabilities(probabilities: number[]) {
   const total = probabilities.reduce((sum, probability) => sum + probability, 0);
   if (total <= 0) return probabilities.map(() => 1 / probabilities.length);
   return probabilities.map((probability) => probability / total);
+}
+
+function normalizeHeatmap(values?: number[]) {
+  const cells = Array.from({ length: 15 }, (_, index) => clamp(values?.[index] ?? 0, 0, 100));
+  const max = Math.max(1, ...cells);
+  return cells.map((value) => Math.round((value / max) * 100));
+}
+
+function estimatedHeatmap(seed: string, attackingBias: number) {
+  return Array.from({ length: 15 }, (_, index) => {
+    const row = Math.floor(index / 5);
+    const lane = index % 5;
+    const attackWeight = 0.65 + row * 0.22 + attackingBias * 0.4;
+    const centralWeight = 1 - Math.abs(lane - 2) * 0.12;
+    const noise = 0.82 + hashUnit(`${seed}:${index}`) * 0.36;
+    return Math.round(clamp(attackWeight * centralWeight * noise * 55, 8, 100));
+  });
 }
 
 function marketCycle(startsAt: string) {
@@ -544,6 +596,44 @@ function timeAdjustment(startsAt: string) {
   return 0;
 }
 
+function matchMinuteRatio(context: ModelContext) {
+  if (context.status !== "live") return context.status === "finished" ? 1 : 0.12;
+  const minute = Number((context.minute ?? "").match(/\d+/)?.[0] ?? 0);
+  if (!Number.isFinite(minute) || minute <= 0) return 0.18;
+  return clamp(minute / (context.sport === "soccer" ? 90 : 60), 0.08, 1);
+}
+
+function modelLiveStats(context: ModelContext, homePower: number, awayPower: number, homeProb: number, awayProb: number): NonNullable<Match["liveStats"]> {
+  if (context.external.stats) return context.external.stats;
+  const ratio = matchMinuteRatio(context);
+  const possessionHome = clamp(50 + (homePower - awayPower) * 24 + (hashUnit(`${context.home.name}:possession`) - 0.5) * 5, 34, 66);
+  const possessionAway = 100 - possessionHome;
+  const scoreTotal = (context.home.score ?? 0) + (context.away.score ?? 0);
+  const xgBase = context.sport === "soccer" ? 1.45 : context.sport === "nhl" ? 2.8 : 3.2;
+  const homeXg = round(clamp((xgBase * ratio * (0.72 + homeProb)) + (context.home.score ?? 0) * 0.18, 0.05, 4.8));
+  const awayXg = round(clamp((xgBase * ratio * (0.72 + awayProb)) + (context.away.score ?? 0) * 0.18, 0.05, 4.8));
+  const shotsHome = Math.max(1, Math.round(homeXg * 4.8 + ratio * 4 + hashUnit(`${context.home.name}:shots`) * 3));
+  const shotsAway = Math.max(1, Math.round(awayXg * 4.8 + ratio * 4 + hashUnit(`${context.away.name}:shots`) * 3));
+  const sotHome = Math.max(0, Math.round(shotsHome * clamp(0.32 + homeProb * 0.16, 0.28, 0.52)));
+  const sotAway = Math.max(0, Math.round(shotsAway * clamp(0.32 + awayProb * 0.16, 0.28, 0.52)));
+  const momentumHome = clamp(possessionHome * 0.45 + homeProb * 40 + ((context.home.score ?? 0) - (context.away.score ?? 0)) * 7 + scoreTotal * 0.8, 6, 94);
+  const momentumAway = clamp(100 - momentumHome + (hashUnit(`${context.away.name}:momentum`) - 0.5) * 6, 6, 94);
+  return {
+    source: "model-estimate",
+    possession: { home: Math.round(possessionHome), away: Math.round(possessionAway) },
+    xg: { home: homeXg, away: awayXg },
+    shots: { home: shotsHome, away: shotsAway },
+    shotsOnTarget: { home: sotHome, away: sotAway },
+    dangerousAttacks: { home: Math.round(momentumHome * ratio * 1.55), away: Math.round(momentumAway * ratio * 1.55) },
+    corners: { home: Math.round(homeXg * 1.7 + ratio * 2), away: Math.round(awayXg * 1.7 + ratio * 2) },
+    momentum: { home: Math.round(momentumHome), away: Math.round(momentumAway) },
+    heatmap: {
+      home: normalizeHeatmap(estimatedHeatmap(`${context.home.name}:${context.startsAt}`, homeProb - awayProb)),
+      away: normalizeHeatmap(estimatedHeatmap(`${context.away.name}:${context.startsAt}`, awayProb - homeProb).reverse()),
+    },
+  };
+}
+
 function modelConfidence(context: ModelContext, closeness: number) {
   const hasHomeRecord = Boolean(context.home.record);
   const hasAwayRecord = Boolean(context.away.record);
@@ -573,10 +663,12 @@ function modelOdds(context: ModelContext): ModelPricing {
     : [clamp(rawHome, 0.04, 0.92), 0, clamp(rawAway, 0.04, 0.92)];
   const confidence = modelConfidence(context, closeness);
   const dataQuality = clamp(confidence + (context.home.record && context.away.record ? 0.04 : -0.06) + context.external.dataQualityBoost, 0.28, 0.98);
+  const liveStats = modelLiveStats(context, homePower, awayPower, homeProb, awayProb);
   const calibrationDiscount = context.external.calibrationSampleSize > 50 ? (context.external.closingLineScore - 0.5) * 0.025 : 0;
   const margin = round(clamp(0.045 + (1 - confidence) * 0.045 + (context.status === "live" ? 0.012 : 0) + context.external.marginBoost - calibrationDiscount, 0.035, 0.14), 3);
   const toOdds = (probability: number) => round(clamp(1 / (probability * (1 + margin)), 1.08, 18));
-  const expectedTotal = profile.total + live.pace + (homePower + awayPower - 1) * profile.volatility * (context.sport === "soccer" ? 1.2 : 8);
+  const statsPressure = context.sport === "soccer" ? (liveStats.xg.home + liveStats.xg.away - 2.4) * 0.35 : (liveStats.shotsOnTarget.home + liveStats.shotsOnTarget.away) * 0.03;
+  const expectedTotal = profile.total + live.pace + statsPressure + (homePower + awayPower - 1) * profile.volatility * (context.sport === "soccer" ? 1.2 : 8);
   const totalLineBase = context.sport === "soccer" || context.sport === "mlb" || context.sport === "nhl" || context.sport === "boxing"
     ? clamp(expectedTotal, profile.total * 0.55, profile.total * 1.65)
     : clamp(expectedTotal, profile.total * 0.75, profile.total * 1.25);
@@ -593,6 +685,7 @@ function modelOdds(context: ModelContext): ModelPricing {
       total: { line: totalLine, over: toOdds(overProb), under: toOdds(1 - overProb) },
       handicap: { line: handicapLine, home: round(1.86 + clamp(awayProb - homeProb, -0.22, 0.26)), away: round(1.86 + clamp(homeProb - awayProb, -0.22, 0.26)) },
     },
+    liveStats,
     meta: {
       version: modelVersion,
       confidence: round(confidence),
@@ -606,6 +699,7 @@ function modelOdds(context: ModelContext): ModelPricing {
         "home-advantage",
         "time-to-start",
         "five-minute-line-movement",
+        "xg-possession-momentum",
         context.status === "live" ? "live-score-state" : "pre-match-state",
         ...context.external.feedSignals,
       ],
@@ -668,6 +762,7 @@ function normalizeFallbackEvent(event: EspnEvent, config: (typeof fallbackScoreb
     minute: competition?.status?.type?.shortDetail ?? competition?.status?.displayClock,
     score: hasScore ? `${home.score} - ${away.score}` : undefined,
     odds: pricing.odds,
+    liveStats: pricing.liveStats,
     oddsSource: "model-provider",
     oddsProvider: `${modelVersion} open model`,
     oddsUpdatedAt: new Date().toISOString(),
