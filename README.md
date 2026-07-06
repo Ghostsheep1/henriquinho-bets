@@ -44,6 +44,8 @@ LICENSED_SHARP_FEED_URL=
 LICENSED_SHARP_FEED_KEY=
 LICENSED_HISTORY_FEED_URL=
 LICENSED_HISTORY_FEED_KEY=
+LICENSED_STATS_FEED_URL=
+LICENSED_STATS_FEED_KEY=
 TRADER_CONTROLS_JSON=
 ```
 
@@ -51,6 +53,7 @@ Free-tier sources:
 
 - Supabase: [https://supabase.com](https://supabase.com)
 - The Odds API: [https://the-odds-api.com](https://the-odds-api.com)
+- API-Football: [https://www.api-football.com](https://www.api-football.com)
 - Public scoreboards are used for local sports data and do not require an API key.
 
 ## Supabase database
@@ -67,11 +70,11 @@ The schema creates `profiles`, `transactions`, `matches`, `bets`, and `game_roun
 
 ## API routes
 
-- `GET /api/odds`: uses The Odds API for realtime bookmaker odds when `THE_ODDS_API_KEY` or `ODDS_API_KEY` has quota. If bookmaker odds are unavailable, it returns `HENQ-OPEN-ODDS-3.0` model odds with confidence, feed status, closing-line calibration metadata, trader controls, and market risk limits.
+- `GET /api/odds`: uses The Odds API for realtime bookmaker odds when `THE_ODDS_API_KEY` or `ODDS_API_KEY` has quota. If bookmaker odds are unavailable, it returns `HENQ-OPEN-ODDS-3.0` model odds with confidence, feed status, closing-line calibration metadata, trader controls, and market risk limits. Live possession, shots, corners, dangerous attacks, and provider xG are shown only when real `API_FOOTBALL_KEY` or `LICENSED_STATS_FEED_*` data is available.
 - `GET /api/football`: fetches featured soccer tournament scoreboards for the featured tournament panel.
 - `POST /api/settle`: placeholder settlement endpoint for a cron worker that compares open bets against final provider results.
 
-The open model is unlimited for the beta because it uses public scoreboards and local calculations. Licensed injury/news/sharp/history feeds are optional: configure the corresponding `LICENSED_*_FEED_URL` and `LICENSED_*_FEED_KEY` variables when you have a vendor. Each feed may return an array or `{ records: [...] }` with fields like `eventId`, `home`, `away`, `team`, `side`, `impact`, `probabilityShift`, `confidence`, `closingLineScore`, and `sampleSize`.
+The open model is unlimited for the beta because it uses public scoreboards and local calculations. Licensed injury/news/sharp/history/stats feeds are optional: configure the corresponding `LICENSED_*_FEED_URL` and `LICENSED_*_FEED_KEY` variables when you have a vendor. Each feed may return an array or `{ records: [...] }` with fields like `eventId`, `home`, `away`, `team`, `side`, `impact`, `probabilityShift`, `confidence`, `closingLineScore`, `sampleSize`, `possessionHome`, `possessionAway`, `xgHome`, `xgAway`, `shotsHome`, `shotsAway`, `shotsOnTargetHome`, `shotsOnTargetAway`, `dangerousAttacksHome`, `dangerousAttacksAway`, `cornersHome`, `cornersAway`, `momentumHome`, `momentumAway`, `heatmapHome`, and `heatmapAway`.
 
 `TRADER_CONTROLS_JSON` supports manual market controls without code changes:
 
