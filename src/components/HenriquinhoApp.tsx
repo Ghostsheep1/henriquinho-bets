@@ -1438,21 +1438,23 @@ function LiveStatsPanel({ match }: { match: Match }) {
   return (
     <div className="mt-3 rounded-md border border-white/10 bg-white/[0.03] p-3">
       <div className="mb-2 flex items-center justify-between gap-2 text-[11px] uppercase text-slate-500">
-        <span>{stats.source === "licensed-feed" ? "Live stats feed" : "AI live stats model"}</span>
-        <span>{match.status === "live" ? "Updating live" : "Pre-match projection"}</span>
+        <span>{stats.source === "api-football" ? "API-Football live stats" : "Licensed live stats feed"}</span>
+        <span>{stats.updatedAt ? `Updated ${new Date(stats.updatedAt).toLocaleTimeString()}` : match.status === "live" ? "Updating live" : "Verified feed"}</span>
       </div>
-      <div className="grid gap-3 md:grid-cols-[1fr_120px]">
+      <div className={clsx("grid gap-3", stats.heatmap ? "md:grid-cols-[1fr_120px]" : "")}>
         <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
           <StatPill label="Poss" home={stats.possession.home} away={stats.possession.away} suffix="%" />
-          <StatPill label="xG" home={stats.xg.home} away={stats.xg.away} />
+          {stats.xg ? <StatPill label="xG" home={stats.xg.home} away={stats.xg.away} /> : <StatPill label="Shots" home={stats.shots.home} away={stats.shots.away} />}
           <StatPill label="SOT" home={stats.shotsOnTarget.home} away={stats.shotsOnTarget.away} />
           <StatPill label="Mom" home={stats.momentum.home} away={stats.momentum.away} />
         </div>
-        <div className="grid grid-cols-5 gap-1" aria-label="Match heatmap">
-          {stats.heatmap.home.slice(0, 15).map((value, index) => (
-            <span key={index} className="h-3 rounded-sm bg-emerald-400" style={{ opacity: 0.18 + value / 130 }} />
-          ))}
-        </div>
+        {stats.heatmap && (
+          <div className="grid grid-cols-5 gap-1" aria-label="Match heatmap">
+            {stats.heatmap.home.slice(0, 15).map((value, index) => (
+              <span key={index} className="h-3 rounded-sm bg-emerald-400" style={{ opacity: 0.18 + value / 130 }} />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
