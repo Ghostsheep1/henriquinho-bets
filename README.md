@@ -34,7 +34,9 @@ SUPABASE_SERVICE_ROLE_KEY=your-service-role-key-for-server-jobs-only
 THE_ODDS_API_KEY=your-the-odds-api-key
 ODDS_API_KEY=your-the-odds-api-key
 REAL_ODDS_ONLY=true
-HENRIQUINHO_INTERNAL_SPORTS_ONLY=true
+HENRIQUINHO_INTERNAL_SPORTS_ONLY=false
+API_FOOTBALL_REAL_SNAPSHOT=true
+API_FOOTBALL_REFRESH_MS=864000
 API_FOOTBALL_KEY=your-api-football-key
 DEFAULT_MARKET_MAX_STAKE=250
 LICENSED_INJURY_FEED_URL=
@@ -71,7 +73,7 @@ The schema creates `profiles`, `transactions`, `matches`, `bets`, and `game_roun
 
 ## API routes
 
-- `GET /api/odds`: uses The Odds API for realtime bookmaker odds when `THE_ODDS_API_KEY` or `ODDS_API_KEY` has quota. If bookmaker odds are unavailable, it returns `HENQ-OPEN-ODDS-3.0` model odds with confidence, feed status, closing-line calibration metadata, trader controls, and market risk limits. Live possession, shots, corners, dangerous attacks, and provider xG are shown only when real `API_FOOTBALL_KEY` or `LICENSED_STATS_FEED_*` data is available.
+- `GET /api/odds`: uses API-Football real fixture snapshots when `API_FOOTBALL_REAL_SNAPSHOT=true`, refreshing upstream at most once every `API_FOOTBALL_REFRESH_MS` milliseconds. `864000` ms is 14 minutes 24 seconds, or 100 refresh windows per day. The app calculates Henriquinho odds from that cached real fixture snapshot. If snapshot mode is off, it can use The Odds API for realtime bookmaker odds when `THE_ODDS_API_KEY` or `ODDS_API_KEY` has quota, or the model fallback when configured. Live possession, shots, corners, dangerous attacks, and provider xG are shown only when real `API_FOOTBALL_KEY` or `LICENSED_STATS_FEED_*` data is available.
 - `GET /api/football`: fetches featured soccer tournament scoreboards for the featured tournament panel.
 - `GET /api/henriquinho-sports`: local unlimited Henriquinho sports API. When `HENRIQUINHO_INTERNAL_SPORTS_ONLY=true`, `/api/odds` and `/api/football` use this internal engine and make no external sports API calls. These are generated demo markets, not real-world live sports data.
 - `POST /api/settle`: placeholder settlement endpoint for a cron worker that compares open bets against final provider results.
