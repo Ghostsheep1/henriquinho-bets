@@ -347,6 +347,7 @@ function lockedAccountKey(user: AppUser | null) {
 }
 
 type SportsPayload = {
+  source?: "odds-api" | "espn-public" | "henriquinho-model" | "henriquinho-internal";
   configured: boolean;
   matches: Match[];
   worldCup?: Match[];
@@ -469,6 +470,7 @@ function isInPlayMarket(match: Match) {
 }
 
 function oddsAreFresh(match: Match) {
+  if (match.source === "henriquinho-internal") return true;
   if (match.oddsSource === "model-provider") return true;
   if (match.oddsSource !== "real-provider") return false;
   const updatedAt = new Date(match.oddsUpdatedAt ?? "").getTime();
@@ -1385,6 +1387,7 @@ function MatchCard({ match, addPick, slip }: { match: Match; addPick: (pick: Bet
   const paused = bettingPaused(match);
   const realOdds = match.oddsSource === "real-provider";
   const modelOdds = match.oddsSource === "model-provider";
+  const internalOdds = match.source === "henriquinho-internal";
   const bettingOpen = (match.status === "live" || match.status === "upcoming") && !paused;
   const maxStake = match.risk?.maxStake;
   const picks: BetPick[] = match.odds && bettingOpen ? [
@@ -1413,7 +1416,7 @@ function MatchCard({ match, addPick, slip }: { match: Match; addPick: (pick: Bet
           <p className="text-sm text-slate-400">{match.score ?? dateTime.format(new Date(match.startsAt))} {match.minute ? `- ${match.minute}` : ""}</p>
         </div>
         <div className={clsx("rounded-md px-3 py-2 text-sm font-bold", realOdds ? "bg-emerald-400/10 text-emerald-200" : "bg-amber-300/10 text-amber-100")}>
-          {paused ? "Odds refresh locked" : bettingOpen && match.odds ? realOdds ? "Realtime odds" : modelOdds ? "Henriquinho model odds" : "Calculated odds" : match.status === "finished" ? "Final" : "Odds unavailable"}
+          {paused ? "Odds refresh locked" : bettingOpen && match.odds ? realOdds ? "Realtime odds" : internalOdds ? "Internal demo odds" : modelOdds ? "Henriquinho model odds" : "Calculated odds" : match.status === "finished" ? "Final" : "Odds unavailable"}
         </div>
       </div>
       {realOdds && match.oddsUpdatedAt && <div className="mt-3 rounded-md border border-emerald-300/20 bg-emerald-400/10 px-3 py-2 text-xs text-emerald-100">Provider: {match.oddsProvider}. Updated {new Date(match.oddsUpdatedAt).toLocaleTimeString()}.</div>}
@@ -1441,7 +1444,7 @@ function LiveStatsPanel({ match }: { match: Match }) {
   return (
     <div className="mt-3 rounded-md border border-white/10 bg-white/[0.03] p-3">
       <div className="mb-2 flex items-center justify-between gap-2 text-[11px] uppercase text-slate-500">
-        <span>{stats.source === "api-football" ? "API-Football live stats" : "Licensed live stats feed"}</span>
+        <span>{stats.source === "api-football" ? "API-Football live stats" : stats.source === "henriquinho-internal" ? "Internal demo stats" : "Licensed live stats feed"}</span>
         <span>{stats.updatedAt ? `Updated ${new Date(stats.updatedAt).toLocaleTimeString()}` : match.status === "live" ? "Updating live" : "Verified feed"}</span>
       </div>
       <div className={clsx("grid gap-3", stats.heatmap ? "md:grid-cols-[1fr_120px]" : "")}>
