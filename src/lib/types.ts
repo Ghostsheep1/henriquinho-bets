@@ -62,7 +62,7 @@ export type Match = {
     suspended?: boolean;
     note?: string;
   };
-  source: "espn-public" | "odds-api" | "henriquinho-model" | "henriquinho-internal";
+  source: "espn-public" | "odds-api" | "api-football" | "henriquinho-model" | "henriquinho-internal";
 };
 
 export type BetPick = {
