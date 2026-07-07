@@ -9,17 +9,19 @@ const oddsApiKeyRaw = (process.env.THE_ODDS_API_KEY ?? process.env.ODDS_API_KEY 
 const oddsApiKey = oddsApiKeyRaw && !oddsApiKeyRaw.includes("your-") ? oddsApiKeyRaw : undefined;
 const apiFootballKeyRaw = (process.env.API_FOOTBALL_KEY ?? "").trim();
 const apiFootballKey = apiFootballKeyRaw && !apiFootballKeyRaw.includes("your-") ? apiFootballKeyRaw : undefined;
+const apiFootballRealSnapshot = process.env.API_FOOTBALL_REAL_SNAPSHOT === "true";
 const internalSportsOnly = process.env.HENRIQUINHO_INTERNAL_SPORTS_ONLY === "true";
 const realOddsOnly = process.env.REAL_ODDS_ONLY !== "false";
 const oddsCacheTtlMs = 5 * 60 * 1000;
 const oddsErrorCacheTtlMs = 60 * 60 * 1000;
 const scoreboardCacheTtlMs = 60 * 1000;
+const apiFootballSnapshotCacheTtlMs = Math.max(60 * 1000, Number(process.env.API_FOOTBALL_REFRESH_MS ?? 864000));
 const maxOddsSportsPerRefresh = Math.max(1, Number(process.env.ODDS_REFRESH_SPORT_LIMIT ?? 8));
 const modelVersion = "HENQ-OPEN-ODDS-3.0";
 const defaultMaxMarketStake = Number(process.env.DEFAULT_MARKET_MAX_STAKE ?? 250);
 
 type OddsPayload = {
-  source: "odds-api" | "espn-public" | "henriquinho-model" | "henriquinho-internal";
+  source: "odds-api" | "espn-public" | "api-football" | "henriquinho-model" | "henriquinho-internal";
   oddsSource: "real-provider" | "model-provider" | "calculated-demo";
   configured: boolean;
   realOddsOnly: boolean;
@@ -39,6 +41,7 @@ let fallbackCache: CacheEntry<Match[]> | null = null;
 let licensedSignalsCache: CacheEntry<{ records: Record<LicensedFeedKind, LicensedFeedRecord[]>; status: FeedStatus; traderControls: TraderControls }> | null = null;
 let apiFootballFixtureCache: CacheEntry<ApiFootballFixture[]> | null = null;
 let apiFootballStatsCache: CacheEntry<Map<number, NonNullable<Match["liveStats"]>>> | null = null;
+let apiFootballSnapshotCache: CacheEntry<Match[]> | null = null;
 
 const realOddsSports: Array<{ key: string; sport: SportKey; league: string; country: string }> = [
   { key: "soccer_fifa_world_cup", sport: "soccer", league: "FIFA World Cup", country: "World" },
@@ -236,7 +239,8 @@ type EspnEvent = {
 };
 
 type ApiFootballFixture = {
-  fixture?: { id?: number; date?: string; status?: { short?: string; elapsed?: number | null } };
+  fixture?: { id?: number; date?: string; status?: { long?: string; short?: string; elapsed?: number | null } };
+  league?: { id?: number; name?: string; country?: string };
   teams?: { home?: { name?: string }; away?: { name?: string } };
   goals?: { home?: number | null; away?: number | null };
   statistics?: ApiFootballTeamStatistics[];
@@ -849,6 +853,89 @@ async function findApiFootballStatsForMatch(home: string, away: string, startsAt
   return (await getApiFootballLiveStats()).get(fixtureId);
 }
 
+function apiFootballDateKey() {
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function apiFootballStatus(status?: string): Match["status"] {
+  const code = status ?? "";
+  if (["1H", "2H", "ET", "BT", "P", "LIVE", "HT", "INT"].includes(code)) return "live";
+  if (["FT", "AET", "PEN"].includes(code)) return "finished";
+  if (["PST", "CANC", "ABD", "AWD", "WO"].includes(code)) return "postponed";
+  return "upcoming";
+}
+
+function normalizeApiFootballFixture(fixture: ApiFootballFixture): Match | null {
+  const fixtureId = fixture.fixture?.id;
+  const startsAt = fixture.fixture?.date;
+  const home = fixture.teams?.home?.name;
+  const away = fixture.teams?.away?.name;
+  if (!fixtureId || !startsAt || !home || !away) return null;
+
+  const status = apiFootballStatus(fixture.fixture?.status?.short);
+  if (status === "finished" || status === "postponed") return null;
+
+  const hasScore = fixture.goals?.home !== null && fixture.goals?.home !== undefined && fixture.goals?.away !== null && fixture.goals?.away !== undefined;
+  const external = emptyExternalSignals({ injury: "missing", news: "missing", sharp: "missing", history: "missing", stats: "missing" });
+  const pricing = modelOdds({
+    sport: "soccer",
+    league: fixture.league?.name ?? "Football",
+    startsAt,
+    status,
+    minute: fixture.fixture?.status?.elapsed ? `${fixture.fixture.status.elapsed}'` : fixture.fixture?.status?.short,
+    home: { name: home, score: fixture.goals?.home ?? 0, homeAway: "home" },
+    away: { name: away, score: fixture.goals?.away ?? 0, homeAway: "away" },
+    external,
+  });
+
+  return {
+    id: `api-football-${fixtureId}`,
+    sport: "soccer",
+    league: fixture.league?.name ?? "Football",
+    country: fixture.league?.country ?? "World",
+    home,
+    away,
+    startsAt,
+    status,
+    minute: fixture.fixture?.status?.elapsed ? `${fixture.fixture.status.elapsed}'` : undefined,
+    score: hasScore && status === "live" ? `${fixture.goals?.home} - ${fixture.goals?.away}` : undefined,
+    odds: pricing.odds,
+    liveStats: pricing.liveStats,
+    oddsSource: "model-provider",
+    oddsProvider: "Henriquinho odds from API-Football real fixtures",
+    oddsUpdatedAt: new Date().toISOString(),
+    model: {
+      ...pricing.meta,
+      signals: ["api-football-fixture-snapshot", ...pricing.meta.signals.filter((signal) => signal !== "public-scoreboard")],
+    },
+    risk: pricing.risk,
+    trader: pricing.trader,
+    source: "api-football",
+  };
+}
+
+async function getApiFootballSnapshotOdds() {
+  if (!apiFootballKey) throw new Error("API_FOOTBALL_KEY is missing");
+  if (apiFootballSnapshotCache && apiFootballSnapshotCache.expiresAt > Date.now()) return apiFootballSnapshotCache.data;
+
+  const payload = await apiFootballFetch<ApiFootballFixture[]>("fixtures", {
+    date: apiFootballDateKey(),
+    timezone: "America/New_York",
+  });
+  const matches = (payload?.response ?? [])
+    .map(normalizeApiFootballFixture)
+    .filter((match): match is Match => Boolean(match))
+    .sort((a, b) => {
+      if (a.status === "live" && b.status !== "live") return -1;
+      if (a.status !== "live" && b.status === "live") return 1;
+      return new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime();
+    });
+
+  apiFootballSnapshotCache = { expiresAt: Date.now() + apiFootballSnapshotCacheTtlMs, data: matches };
+  return matches;
+}
+
 async function normalizeFallbackEvent(event: EspnEvent, config: (typeof fallbackScoreboardEndpoints)[number], licensed: Awaited<ReturnType<typeof getLicensedSignals>>): Promise<Match | null> {
   const competition = event.competitions?.[0];
   const competitors = competition?.competitors ?? [];
@@ -976,6 +1063,32 @@ export async function GET() {
       message: "Henriquinho internal sports API loaded. No external sports providers are being used.",
     };
     return NextResponse.json(payload, { headers: { "Cache-Control": "private, max-age=5" } });
+  }
+
+  if (apiFootballRealSnapshot) {
+    try {
+      const matches = await getApiFootballSnapshotOdds();
+      const payload: OddsPayload = {
+        source: "api-football",
+        oddsSource: "model-provider",
+        configured: Boolean(apiFootballKey),
+        realOddsOnly: false,
+        matches,
+        message: `API-Football real fixture snapshot loaded. Next upstream refresh is capped at ${Math.round(apiFootballSnapshotCacheTtlMs / 1000)} seconds.`,
+      };
+      return NextResponse.json(payload, { headers: { "Cache-Control": "private, max-age=30" } });
+    } catch (error) {
+      const payload: OddsPayload = {
+        source: "api-football",
+        oddsSource: "model-provider",
+        configured: Boolean(apiFootballKey),
+        realOddsOnly: false,
+        matches: [],
+        message: "API-Football snapshot is unavailable. Add API_FOOTBALL_KEY to load real fixtures.",
+        providerError: error instanceof Error ? error.message : "Unknown API-Football error",
+      };
+      return NextResponse.json(payload, { headers: { "Cache-Control": "private, max-age=30" } });
+    }
   }
 
   if (responseCache && responseCache.expiresAt > Date.now()) {
