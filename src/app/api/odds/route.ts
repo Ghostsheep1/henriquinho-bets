@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { Match, SportKey } from "@/lib/types";
+import { getHenriquinhoInternalSports } from "@/lib/henriquinhoSports";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -8,6 +9,7 @@ const oddsApiKeyRaw = (process.env.THE_ODDS_API_KEY ?? process.env.ODDS_API_KEY 
 const oddsApiKey = oddsApiKeyRaw && !oddsApiKeyRaw.includes("your-") ? oddsApiKeyRaw : undefined;
 const apiFootballKeyRaw = (process.env.API_FOOTBALL_KEY ?? "").trim();
 const apiFootballKey = apiFootballKeyRaw && !apiFootballKeyRaw.includes("your-") ? apiFootballKeyRaw : undefined;
+const internalSportsOnly = process.env.HENRIQUINHO_INTERNAL_SPORTS_ONLY === "true";
 const realOddsOnly = process.env.REAL_ODDS_ONLY !== "false";
 const oddsCacheTtlMs = 5 * 60 * 1000;
 const oddsErrorCacheTtlMs = 60 * 60 * 1000;
@@ -17,7 +19,7 @@ const modelVersion = "HENQ-OPEN-ODDS-3.0";
 const defaultMaxMarketStake = Number(process.env.DEFAULT_MARKET_MAX_STAKE ?? 250);
 
 type OddsPayload = {
-  source: "odds-api" | "espn-public" | "henriquinho-model";
+  source: "odds-api" | "espn-public" | "henriquinho-model" | "henriquinho-internal";
   oddsSource: "real-provider" | "model-provider" | "calculated-demo";
   configured: boolean;
   realOddsOnly: boolean;
@@ -963,6 +965,19 @@ async function getFallbackOdds() {
 }
 
 export async function GET() {
+  if (internalSportsOnly) {
+    const internal = getHenriquinhoInternalSports();
+    const payload: OddsPayload = {
+      source: "henriquinho-internal",
+      oddsSource: "model-provider",
+      configured: true,
+      realOddsOnly: false,
+      matches: internal.matches,
+      message: "Henriquinho internal sports API loaded. No external sports providers are being used.",
+    };
+    return NextResponse.json(payload, { headers: { "Cache-Control": "private, max-age=5" } });
+  }
+
   if (responseCache && responseCache.expiresAt > Date.now()) {
     return NextResponse.json({ ...responseCache.data, cached: true }, { headers: { "Cache-Control": "private, max-age=10" } });
   }
