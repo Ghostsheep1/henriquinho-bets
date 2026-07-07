@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
 import type { Match } from "@/lib/types";
+import { getHenriquinhoInternalSports } from "@/lib/henriquinhoSports";
+
+const internalSportsOnly = process.env.HENRIQUINHO_INTERNAL_SPORTS_ONLY === "true";
 
 const featuredTournaments = [
   { slug: "fifa.world", league: "FIFA World Cup", country: "World" },
@@ -53,6 +56,19 @@ function normalizeTournament(event: EspnEvent, tournament: (typeof featuredTourn
 }
 
 export async function GET() {
+  if (internalSportsOnly) {
+    const tournaments = getHenriquinhoInternalSports().matches.filter((match) =>
+      ["FIFA World Cup", "UEFA Euro"].includes(match.league),
+    );
+    return NextResponse.json({
+      source: "henriquinho-internal",
+      configured: true,
+      worldCup: tournaments,
+      matches: tournaments,
+      message: "Henriquinho internal football API loaded",
+    });
+  }
+
   try {
     const results = await Promise.all(
       featuredTournaments.map(async (tournament) => {
