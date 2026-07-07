@@ -1253,17 +1253,20 @@ function Sportsbook({ liveOnly, matches, worldCup, loading, message, slip, setSl
   const [sport, setSport] = useState<SportKey | "all">("all");
   const [league, setLeague] = useState("All leagues");
   const bettableMatches = useMemo(() => matches.filter(isActiveBookmakerMarket), [matches]);
+  const scoreboardMatches = useMemo(() => matches.filter((match) => match.status === "live" || match.status === "upcoming"), [matches]);
   const visibleMatches = useMemo(() => {
-    const base = bettableMatches.filter((match) => (sport === "all" || match.sport === sport) && (league === "All leagues" || match.league === league));
+    const source = bettableMatches.length > 0 ? bettableMatches : scoreboardMatches;
+    const base = source.filter((match) => (sport === "all" || match.sport === sport) && (league === "All leagues" || match.league === league));
     if (liveOnly) return base.filter(isInPlayMarket).sort(inPlayRank);
     return base.sort(sportsbookRank);
-  }, [bettableMatches, league, liveOnly, sport]);
+  }, [bettableMatches, league, liveOnly, scoreboardMatches, sport]);
   const providerReady = message === "ok" || message.startsWith("Realtime bookmaker odds loaded") || message.startsWith("Showing last good bookmaker odds") || message.startsWith("Henriquinho model odds loaded");
   const providerBlocked = Boolean(message && !providerReady);
-  const emptyMessage = providerBlocked ? message : liveOnly ? "No live or starting-soon bookmaker markets" : "No bookmaker odds for this filter yet";
+  const emptyMessage = providerBlocked && matches.length === 0 ? message : liveOnly ? "No live or starting-soon events" : "No events for this filter yet";
   const liveCount = bettableMatches.filter((match) => match.status === "live").length;
   const startingSoonCount = bettableMatches.filter((match) => match.status !== "live" && isInPlayMarket(match)).length;
   const upcomingCount = bettableMatches.length;
+  const eventCount = scoreboardMatches.length;
   const addPick = (pick: BetPick) => {
     setSlip((items) => (items.some((item) => item.id === pick.id) ? items.filter((item) => item.id !== pick.id) : [...items.filter((item) => item.matchId !== pick.matchId || item.market !== pick.market), pick]));
   };
@@ -1280,7 +1283,7 @@ function Sportsbook({ liveOnly, matches, worldCup, loading, message, slip, setSl
           </>
         ) : (
           <>
-            <MarketModeStat label="Upcoming board" value={loading ? "..." : `${upcomingCount} open`} note="Only near-term bettable events." />
+            <MarketModeStat label="Upcoming board" value={loading ? "..." : `${eventCount} events`} note={upcomingCount ? `${upcomingCount} with bookmaker odds.` : "Real events shown; odds waiting on provider."} />
             <MarketModeStat label="Popularity sort" value="Major leagues first" note="World Cup, top soccer, NBA/NFL, then others." />
             <MarketModeStat label="No stale cards" value="14 day cap" note="Far-future and closed games are removed." />
           </>
