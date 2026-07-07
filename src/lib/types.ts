@@ -31,7 +31,7 @@ export type Match = {
   oddsUpdatedAt?: string;
   oddsProvider?: string;
   liveStats?: {
-    source: "licensed-feed" | "api-football";
+    source: "licensed-feed" | "api-football" | "henriquinho-internal";
     possession: { home: number; away: number };
     xg?: { home: number; away: number };
     shots: { home: number; away: number };
@@ -62,7 +62,7 @@ export type Match = {
     suspended?: boolean;
     note?: string;
   };
-  source: "espn-public" | "odds-api" | "henriquinho-model";
+  source: "espn-public" | "odds-api" | "henriquinho-model" | "henriquinho-internal";
 };
 
 export type BetPick = {
