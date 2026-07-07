@@ -34,6 +34,7 @@ SUPABASE_SERVICE_ROLE_KEY=your-service-role-key-for-server-jobs-only
 THE_ODDS_API_KEY=your-the-odds-api-key
 ODDS_API_KEY=your-the-odds-api-key
 REAL_ODDS_ONLY=true
+HENRIQUINHO_INTERNAL_SPORTS_ONLY=true
 API_FOOTBALL_KEY=your-api-football-key
 DEFAULT_MARKET_MAX_STAKE=250
 LICENSED_INJURY_FEED_URL=
@@ -72,6 +73,7 @@ The schema creates `profiles`, `transactions`, `matches`, `bets`, and `game_roun
 
 - `GET /api/odds`: uses The Odds API for realtime bookmaker odds when `THE_ODDS_API_KEY` or `ODDS_API_KEY` has quota. If bookmaker odds are unavailable, it returns `HENQ-OPEN-ODDS-3.0` model odds with confidence, feed status, closing-line calibration metadata, trader controls, and market risk limits. Live possession, shots, corners, dangerous attacks, and provider xG are shown only when real `API_FOOTBALL_KEY` or `LICENSED_STATS_FEED_*` data is available.
 - `GET /api/football`: fetches featured soccer tournament scoreboards for the featured tournament panel.
+- `GET /api/henriquinho-sports`: local unlimited Henriquinho sports API. When `HENRIQUINHO_INTERNAL_SPORTS_ONLY=true`, `/api/odds` and `/api/football` use this internal engine and make no external sports API calls. These are generated demo markets, not real-world live sports data.
 - `POST /api/settle`: placeholder settlement endpoint for a cron worker that compares open bets against final provider results.
 
 The open model is unlimited for the beta because it uses public scoreboards and local calculations. Licensed injury/news/sharp/history/stats feeds are optional: configure the corresponding `LICENSED_*_FEED_URL` and `LICENSED_*_FEED_KEY` variables when you have a vendor. Each feed may return an array or `{ records: [...] }` with fields like `eventId`, `home`, `away`, `team`, `side`, `impact`, `probabilityShift`, `confidence`, `closingLineScore`, `sampleSize`, `possessionHome`, `possessionAway`, `xgHome`, `xgAway`, `shotsHome`, `shotsAway`, `shotsOnTargetHome`, `shotsOnTargetAway`, `dangerousAttacksHome`, `dangerousAttacksAway`, `cornersHome`, `cornersAway`, `momentumHome`, `momentumAway`, `heatmapHome`, and `heatmapAway`.
