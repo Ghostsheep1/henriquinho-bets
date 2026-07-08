@@ -1262,7 +1262,7 @@ function Sportsbook({ liveOnly, matches, worldCup, loading, message, slip, setSl
     if (liveOnly) return base.filter(isInPlayMarket).sort(inPlayRank);
     return base.sort(sportsbookRank);
   }, [bettableMatches, league, liveOnly, scoreboardMatches, sport]);
-  const providerReady = message === "ok" || message.startsWith("Realtime bookmaker odds loaded") || message.startsWith("Showing last good bookmaker odds") || message.startsWith("Henriquinho model odds loaded");
+  const providerReady = message === "ok" || message.startsWith("Realtime bookmaker odds loaded") || message.startsWith("Showing last good bookmaker odds") || message.startsWith("Henriquinho model odds loaded") || message.startsWith("API-Football real fixture snapshot loaded");
   const providerBlocked = Boolean(message && !providerReady);
   const emptyMessage = providerBlocked && matches.length === 0 ? message : liveOnly ? "No live or starting-soon events" : "No events for this filter yet";
   const liveCount = bettableMatches.filter((match) => match.status === "live").length;
@@ -1416,12 +1416,13 @@ function MatchCard({ match, addPick, slip }: { match: Match; addPick: (pick: Bet
           <p className="text-sm text-slate-400">{match.score ?? dateTime.format(new Date(match.startsAt))} {match.minute ? `- ${match.minute}` : ""}</p>
         </div>
         <div className={clsx("rounded-md px-3 py-2 text-sm font-bold", realOdds ? "bg-emerald-400/10 text-emerald-200" : "bg-amber-300/10 text-amber-100")}>
-          {paused ? "Odds refresh locked" : bettingOpen && match.odds ? realOdds ? "Realtime odds" : internalOdds ? "Internal demo odds" : modelOdds ? "Henriquinho model odds" : "Calculated odds" : match.status === "finished" ? "Final" : "Odds unavailable"}
+          {paused ? "Odds refresh locked" : bettingOpen && match.odds ? realOdds ? "Realtime odds" : internalOdds ? "Internal demo odds" : modelOdds ? "Calculated odds" : "Calculated odds" : match.status === "finished" ? "Final" : "Odds unavailable"}
         </div>
       </div>
       {realOdds && match.oddsUpdatedAt && <div className="mt-3 rounded-md border border-emerald-300/20 bg-emerald-400/10 px-3 py-2 text-xs text-emerald-100">Provider: {match.oddsProvider}. Updated {new Date(match.oddsUpdatedAt).toLocaleTimeString()}.</div>}
+      {!realOdds && match.odds && match.oddsUpdatedAt && <div className="mt-3 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs text-amber-100">Calculated from {match.source === "api-football" ? "API-Football real fixtures" : match.source === "henriquinho-internal" ? "Henriquinho internal demo data" : "real scoreboard fixtures"}. Updated {new Date(match.oddsUpdatedAt).toLocaleTimeString()}.</div>}
       {paused && <div className="mt-3 rounded-md border border-red-300/20 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-100">{match.trader?.suspended ? `Market suspended${match.trader.note ? `: ${match.trader.note}` : ""}` : "Live betting paused until the odds provider refreshes this market."}</div>}
-      {picks.length === 0 && <div className="mt-4 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-3 text-sm text-amber-100">{paused ? "Waiting for fresh live odds" : bettingOpen ? "The odds provider has not posted bookmaker lines for this event yet." : "Betting closed"}</div>}
+      {picks.length === 0 && <div className="mt-4 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-3 text-sm text-amber-100">{paused ? "Waiting for fresh live odds" : bettingOpen ? "No odds are available for this event yet." : "Betting closed"}</div>}
       {match.liveStats && <LiveStatsPanel match={match} />}
       <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {picks.map((pick) => {
