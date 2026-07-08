@@ -428,8 +428,8 @@ function matchKey(match: Match) {
 
 function mergeMatch(existing: Match | undefined, incoming: Match) {
   if (!existing) return incoming;
-  const incomingHasOdds = hasBookmakerOdds(incoming);
-  const existingHasOdds = hasBookmakerOdds(existing);
+  const incomingHasOdds = hasPlayableOdds(incoming);
+  const existingHasOdds = hasPlayableOdds(existing);
   if (incomingHasOdds || (!existingHasOdds && incoming.source === "odds-api")) {
     return {
       ...existing,
@@ -452,6 +452,10 @@ function mergeMatch(existing: Match | undefined, incoming: Match) {
     oddsProvider: existing.oddsProvider ?? incoming.oddsProvider,
     oddsUpdatedAt: existing.oddsUpdatedAt ?? incoming.oddsUpdatedAt,
   };
+}
+
+function hasPlayableOdds(match: Match) {
+  return Boolean(match.odds?.moneyline.home && match.odds.moneyline.away);
 }
 
 function isFreshMarket(match: Match) {
