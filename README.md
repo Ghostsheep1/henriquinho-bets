@@ -29,12 +29,9 @@ Replace the placeholders in `.env.local`:
 
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-supabase-anon-key
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-key-for-server-jobs-only
-THE_ODDS_API_KEY=your-the-odds-api-key
-ODDS_API_KEY=your-the-odds-api-key
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-supabase-publishable-key
 ODDS_PROVIDER=the-odds-api
-ODDS_OPERATION_MODE=pregame-snapshot
+ODDS_OPERATION_MODE=model-only
 ODDS_PROVIDER_SPORT=upcoming
 ODDS_PROVIDER_REGIONS=us
 ODDS_PROVIDER_MARKETS=h2h
@@ -97,11 +94,10 @@ Set these application values in local `.env.local` and in Vercel Production:
 
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-public-anon-key
-SUPABASE_SERVICE_ROLE_KEY=server-only-service-role-key
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-public-publishable-key
 ```
 
-Never prefix the service-role key with `NEXT_PUBLIC_`. It is used only by server routes to verify a bearer token and enforce admin authorization.
+Supabase uses exactly these two public variables. Database RLS and secure RPC functions enforce protected operations; no privileged Supabase key is used by this project.
 
 ### Redirect URLs
 
@@ -124,6 +120,19 @@ Create a Google OAuth client, then add the Supabase callback URL shown in Supaba
 Create an Apple Services ID and Sign In with Apple key, configure the Supabase callback URL in Apple Developer, then enable Apple in Supabase with the Services ID, team ID, key ID, and private key. Apple may provide a private relay email and only supplies a name on the first authorization; the profile trigger/RPC preserves the original profile on later logins. Test a first production login before treating Apple login as live.
 
 Supabase does not safely merge two separate authentication users simply because an email string appears similar. When a user signs in with the same verified email through a provider, Supabase identity linking behavior must be tested in your project. Do not merge unverified accounts in application code; offer a signed-in account-linking flow only after verifying both identities through Supabase.
+
+## Supabase security and model-only mode
+
+Henriquinho Bets requires exactly two Supabase environment variables: `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`. There is no service-role, secret, anon-key alias, or privileged REST client in this project. The browser and server clients both operate with the signed-in session; RLS, triggers, and narrowly scoped database RPC functions protect roles, balances, account status, bets, and audit records.
+
+In the Supabase SQL Editor, run these migrations in order after `supabase/schema.sql`:
+
+1. `supabase/migrations/20260713_auth_profiles.sql`
+2. `supabase/migrations/20260713_wallet_and_rpcs.sql`
+
+The second migration creates idempotent wallet/account/audit structures and secure model-bet placement and settlement RPCs. Direct client inserts into bets and direct changes to wallet balances are removed.
+
+Set `ODDS_OPERATION_MODE=model-only` while bookmaker credits are unavailable. This is the default. It serves Henriquinho model markets and prevents `/api/odds`, player refreshes, bet placement, and the protected snapshot route from initiating an Odds API request. Future reactivation is configuration-only: set `ODDS_OPERATION_MODE=pregame-snapshot`, provide `THE_ODDS_API_KEY`, and redeploy a protected Edge Function or snapshot writer.
 
 The schema creates `profiles`, `transactions`, `matches`, `bets`, and `game_rounds` with Row Level Security policies for user-owned records.
 
