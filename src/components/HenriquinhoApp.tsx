@@ -950,8 +950,8 @@ export default function HenriquinhoApp() {
         <Sidebar active={active} setActive={setActive} open={menuOpen} setOpen={setMenuOpen} language={language} isAdmin={isAdmin} />
         <main className="min-w-0 flex-1 space-y-4">
           <Hero setActive={setActive} language={language} />
-          {active === "sports" && <Sportsbook matches={matches} worldCup={worldCup} loading={loading} message={message} slip={slip} setSlip={setSlip} />}
-          {active === "live" && <Sportsbook liveOnly matches={matches} worldCup={worldCup} loading={loading} message={message} slip={slip} setSlip={setSlip} />}
+          {active === "sports" && <Sportsbook matches={matches} worldCup={worldCup} loading={loading} message={message} slip={slip} setSlip={setSlip} isAdmin={isAdmin} />}
+          {active === "live" && <Sportsbook liveOnly matches={matches} worldCup={worldCup} loading={loading} message={message} slip={slip} setSlip={setSlip} isAdmin={isAdmin} />}
           {active === "casino" && <Casino balance={balance} soundOn={soundOn} onResult={casinoResult} />}
           {active === "wallet" && <WalletView user={user} balance={balance} claimBonus={claimBonus} transactions={transactions} onDeposit={() => setDepositOpen(true)} onLock={lockAccess} riskSignals={riskSignals} />}
           {active === "profile" && <ProfileView user={user} setUser={setUser} balance={balance} bets={bets} winCount={winCount} lossCount={lossCount} onLock={lockAccess} riskSignals={riskSignals} settleBet={settleBet} cashOutBet={cashOutBet} cashOutValue={(bet) => cashOutOffer(bet, matchById)} />}
@@ -1223,7 +1223,7 @@ function Hero({ setActive, language }: { setActive: (id: string) => void; langua
   );
 }
 
-function Sportsbook({ liveOnly, matches, worldCup, loading, message, slip, setSlip }: { liveOnly?: boolean; matches: Match[]; worldCup: Match[]; loading: boolean; message: string; slip: BetPick[]; setSlip: React.Dispatch<React.SetStateAction<BetPick[]>> }) {
+function Sportsbook({ liveOnly, matches, worldCup, loading, message, slip, setSlip, isAdmin }: { liveOnly?: boolean; matches: Match[]; worldCup: Match[]; loading: boolean; message: string; slip: BetPick[]; setSlip: React.Dispatch<React.SetStateAction<BetPick[]>>; isAdmin: boolean }) {
   const [sport, setSport] = useState<SportKey | "all">("all");
   const [league, setLeague] = useState("All leagues");
   const bettableMatches = useMemo(() => matches.filter(isActiveBookmakerMarket), [matches]);
@@ -1276,7 +1276,7 @@ function Sportsbook({ liveOnly, matches, worldCup, loading, message, slip, setSl
           {loading && <SkeletonMarkets />}
           {!loading && visibleMatches.length === 0 && <EmptyMarkets message={emptyMessage} />}
           {visibleMatches.map((match) => (
-            <MatchCard key={match.id} match={match} addPick={addPick} slip={slip} />
+            <MatchCard key={match.id} match={match} addPick={addPick} slip={slip} isAdmin={isAdmin} />
           ))}
         </div>
         <div className="rounded-md border border-white/10 bg-white/[0.04] p-4">
@@ -1354,12 +1354,10 @@ function EmptyMarkets({ message }: { message: string }) {
   );
 }
 
-function MatchCard({ match, addPick, slip }: { match: Match; addPick: (pick: BetPick) => void; slip: BetPick[] }) {
+function MatchCard({ match, addPick, slip, isAdmin }: { match: Match; addPick: (pick: BetPick) => void; slip: BetPick[]; isAdmin: boolean }) {
   const event = `${match.home} vs ${match.away}`;
   const paused = bettingPaused(match);
   const realOdds = match.oddsSource === "real-provider";
-  const modelOdds = match.oddsSource === "model-provider";
-  const internalOdds = match.source === "henriquinho-internal";
   const bettingOpen = (match.status === "live" || match.status === "upcoming") && !paused;
   const maxStake = match.risk?.maxStake;
   const picks: BetPick[] = match.odds && bettingOpen ? [
@@ -1387,12 +1385,11 @@ function MatchCard({ match, addPick, slip }: { match: Match; addPick: (pick: Bet
           <h3 className="mt-2 text-lg font-black text-white">{event}</h3>
           <p className="text-sm text-slate-400">{match.score ?? dateTime.format(new Date(match.startsAt))} {match.minute ? `- ${match.minute}` : ""}</p>
         </div>
-        <div className={clsx("rounded-md px-3 py-2 text-sm font-bold", realOdds ? "bg-emerald-400/10 text-emerald-200" : "bg-amber-300/10 text-amber-100")}>
-          {paused ? "Odds refresh locked" : bettingOpen && match.odds ? realOdds ? "Realtime odds" : internalOdds ? "Internal demo odds" : modelOdds ? "Calculated odds" : "Calculated odds" : match.status === "finished" ? "Final" : "Odds unavailable"}
-        </div>
+        {(paused || !match.odds || match.status === "finished") && <div className={clsx("rounded-md px-3 py-2 text-sm font-bold", realOdds ? "bg-emerald-400/10 text-emerald-200" : "bg-amber-300/10 text-amber-100")}>
+          {paused ? "Odds refresh locked" : match.status === "finished" ? "Final" : "Odds unavailable"}
+        </div>}
       </div>
-      {realOdds && match.oddsUpdatedAt && <div className="mt-3 rounded-md border border-emerald-300/20 bg-emerald-400/10 px-3 py-2 text-xs text-emerald-100">Provider: {match.oddsProvider}. Updated {new Date(match.oddsUpdatedAt).toLocaleTimeString()}.</div>}
-      {!realOdds && match.odds && match.oddsUpdatedAt && <div className="mt-3 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs text-amber-100">Calculated from {match.source === "api-football" ? "API-Football real fixtures" : match.source === "henriquinho-internal" ? "Henriquinho internal demo data" : "real scoreboard fixtures"}. Updated {new Date(match.oddsUpdatedAt).toLocaleTimeString()}.</div>}
+      {isAdmin && match.odds && match.oddsUpdatedAt && <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500"><span className="font-semibold text-slate-400">Market status</span><span aria-hidden>•</span><span>{realOdds ? match.oddsProvider ?? "Bookmaker feed" : "Virtual model market"}</span><span aria-hidden>•</span><span>Refreshed {new Date(match.oddsUpdatedAt).toLocaleTimeString()}</span></div>}
       {paused && <div className="mt-3 rounded-md border border-red-300/20 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-100">{match.trader?.suspended ? `Market suspended${match.trader.note ? `: ${match.trader.note}` : ""}` : "Live betting paused until the odds provider refreshes this market."}</div>}
       {picks.length === 0 && <div className="mt-4 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-3 text-sm text-amber-100">{paused ? "Waiting for fresh live odds" : bettingOpen ? "No odds are available for this event yet." : "Betting closed"}</div>}
       {match.liveStats && <LiveStatsPanel match={match} />}
