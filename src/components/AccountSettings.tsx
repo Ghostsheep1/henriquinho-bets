@@ -15,14 +15,16 @@ export default function AccountSettings() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [guest, setGuest] = useState(false);
 
   useEffect(() => {
     const client = supabase;
     if (!client) { setLoading(false); return; }
     const load = async () => {
       const { data } = await client.auth.getUser();
-      if (!data.user?.email_confirmed_at) { router.replace("/login?next=/account"); return; }
-      setEmail(data.user.email ?? "");
+      if (!data.user || (!data.user.email_confirmed_at && !data.user.is_anonymous)) { router.replace("/login?next=/account"); return; }
+      setGuest(Boolean(data.user.is_anonymous));
+      setEmail(data.user.email ?? "Guest account");
       setNextEmail(data.user.email ?? "");
       const profile = await client.from("profiles").select("display_name,account_status").eq("id", data.user.id).maybeSingle();
       if (!profile.data || profile.data.account_status !== "active") { router.replace("/login"); return; }
@@ -64,10 +66,10 @@ export default function AccountSettings() {
   if (!isSupabaseConfigured) return <Shell><p>Supabase public configuration is required.</p></Shell>;
   if (loading) return <Shell><Loader2 className="animate-spin text-emerald-300" /></Shell>;
   return <Shell>
-    <div className="flex items-center justify-between gap-4"><div><h1 className="text-2xl font-black">Account settings</h1><p className="text-sm text-slate-400">Signed in as {email}</p></div><button onClick={signOut} className="rounded border border-white/15 px-3 py-2 text-sm font-bold">Sign out</button></div>
+    <div className="flex items-center justify-between gap-4"><div><h1 className="text-2xl font-black">{guest ? "Save your account" : "Account settings"}</h1><p className="text-sm text-slate-400">{guest ? "Add an email and password to keep this same wallet and bet history." : `Signed in as ${email}`}</p></div><button onClick={signOut} className="rounded border border-white/15 px-3 py-2 text-sm font-bold">Sign out</button></div>
     <SettingsForm title="Profile" onSubmit={saveName}><Label label="Display name" value={name} onChange={setName} autoComplete="name" /><button disabled={busy} className="primary">Save name</button></SettingsForm>
-    <SettingsForm title="Email" onSubmit={saveEmail}><Label label="Email" value={nextEmail} onChange={setNextEmail} type="email" autoComplete="email" /><p className="text-xs text-slate-400">Changing email requires Supabase verification before the new address becomes active.</p><button disabled={busy || nextEmail === email} className="primary">Change email</button></SettingsForm>
-    <SettingsForm title="Password" onSubmit={savePassword}><Label label="New password" value={password} onChange={setPassword} type="password" autoComplete="new-password" /><button disabled={busy || password.length < 8} className="primary">Change password</button></SettingsForm>
+    <SettingsForm title={guest ? "Add a verified email" : "Email"} onSubmit={saveEmail}><Label label="Email" value={nextEmail} onChange={setNextEmail} type="email" autoComplete="email" /><p className="text-xs text-slate-400">{guest ? "Supabase will verify this address before this guest account becomes recoverable." : "Changing email requires Supabase verification before the new address becomes active."}</p><button disabled={busy || (!guest && nextEmail === email)} className="primary">{guest ? "Save email" : "Change email"}</button></SettingsForm>
+    <SettingsForm title={guest ? "Create a password" : "Password"} onSubmit={savePassword}><Label label="New password" value={password} onChange={setPassword} type="password" autoComplete="new-password" /><button disabled={busy || password.length < 8} className="primary">{guest ? "Save password" : "Change password"}</button></SettingsForm>
     {notice && <p className="rounded bg-emerald-400/10 p-3 text-sm text-emerald-100">{notice}</p>}{error && <p className="rounded bg-red-500/10 p-3 text-sm text-red-100">{error}</p>}
   </Shell>;
 }
