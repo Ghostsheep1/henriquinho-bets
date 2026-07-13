@@ -30,6 +30,14 @@ create table if not exists public.matches (
   result jsonb
 );
 
+create table if not exists public.odds_snapshots (
+  id text primary key,
+  matches jsonb not null,
+  fetched_at timestamptz not null,
+  expires_at timestamptz not null,
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists public.bets (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.profiles(id) on delete cascade,
@@ -78,6 +86,7 @@ alter table public.transactions enable row level security;
 alter table public.bets enable row level security;
 alter table public.game_rounds enable row level security;
 alter table public.matches enable row level security;
+alter table public.odds_snapshots enable row level security;
 
 create policy "profiles are self readable" on public.profiles for select using (auth.uid() = id);
 create policy "profiles are self editable" on public.profiles for update using (auth.uid() = id);

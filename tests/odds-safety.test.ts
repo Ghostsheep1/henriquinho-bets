@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { dedupeProviderEvents, isMarketBettable, isRecordedPriceCurrent, marketFreshnessReason, payoutFromRecordedPrices, providerEventKey, validateSlipAtPlacement } from "../src/lib/odds/marketSafety";
+import { dedupeProviderEvents, isMarketBettable, isPregameSnapshotRequest, isRecordedPriceCurrent, marketFreshnessReason, payoutFromRecordedPrices, providerEventKey, snapshotRefreshBlockReason, validateSlipAtPlacement } from "../src/lib/odds/marketSafety";
 import { requestProviderJson } from "../src/lib/odds/providerClient";
 import type { BetPick, Match } from "../src/lib/types";
 
@@ -112,6 +112,30 @@ test("keeps model fallback virtual and makes disabled fallback suspended", () =>
   assert.equal(virtual.marketSource, "henriquinho-model");
   assert.equal(isMarketBettable(virtual, now, 15 * 60_000, 90_000), true);
   assert.equal(isMarketBettable(disabled, now, 15 * 60_000, 90_000), false);
+});
+
+test("uses exactly one US h2h upcoming request in pregame snapshot mode", () => {
+  assert.equal(isPregameSnapshotRequest({ sport: "upcoming", regions: "us", markets: "h2h", oddsFormat: "decimal" }), true);
+  assert.equal(isPregameSnapshotRequest({ sport: "upcoming", regions: "us", markets: "h2h,totals", oddsFormat: "decimal" }), false);
+});
+
+test("blocks duplicate cron execution, daily limits, and the credit reserve", () => {
+  assert.equal(snapshotRefreshBlockReason({ refreshInFlight: true, dailyRequests: 0, dailyLimit: 12, reserveCredits: 100 }), "A snapshot refresh is already running");
+  assert.equal(snapshotRefreshBlockReason({ refreshInFlight: false, dailyRequests: 12, dailyLimit: 12, reserveCredits: 100 }), "Daily bookmaker request limit reached");
+  assert.equal(snapshotRefreshBlockReason({ refreshInFlight: false, dailyRequests: 1, dailyLimit: 12, remainingCredits: 100, reserveCredits: 100 }), "Provider credit reserve reached");
+});
+
+test("locks a pregame snapshot ten minutes before kickoff and expires it after 135 minutes", () => {
+  const snapshot = market({
+    marketMode: "pregame-snapshot",
+    startsAt: "2026-07-13T12:09:00.000Z",
+    fetchedAt: "2026-07-13T09:44:00.000Z",
+    marketCutoffAt: "2026-07-13T11:50:00.000Z",
+    marketExpiresAt: "2026-07-13T11:59:00.000Z",
+  });
+  assert.equal(marketFreshnessReason(snapshot, now, 15 * 60_000, 90_000), "pregame cutoff reached");
+  const expired = market({ ...snapshot, startsAt: "2026-07-13T15:00:00.000Z", marketCutoffAt: "2026-07-13T14:50:00.000Z" });
+  assert.equal(marketFreshnessReason(expired, now, 15 * 60_000, 90_000), "bookmaker snapshot expired");
 });
 
 test("rejects changed prices and suspended markets at placement", () => {

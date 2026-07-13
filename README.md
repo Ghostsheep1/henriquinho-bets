@@ -34,9 +34,16 @@ SUPABASE_SERVICE_ROLE_KEY=your-service-role-key-for-server-jobs-only
 THE_ODDS_API_KEY=your-the-odds-api-key
 ODDS_API_KEY=your-the-odds-api-key
 ODDS_PROVIDER=the-odds-api
+ODDS_OPERATION_MODE=pregame-snapshot
+ODDS_PROVIDER_SPORT=upcoming
 ODDS_PROVIDER_REGIONS=us
-ODDS_PROVIDER_MARKETS=h2h,spreads,totals
-ODDS_REFRESH_SPORT_LIMIT=1
+ODDS_PROVIDER_MARKETS=h2h
+ODDS_MONTHLY_CREDIT_LIMIT=500
+ODDS_MONTHLY_CREDIT_RESERVE=100
+ODDS_DAILY_REQUEST_LIMIT=12
+ODDS_PREGAME_CUTOFF_MINUTES=10
+ODDS_BOOKMAKER_MAX_AGE_MINUTES=135
+CRON_SECRET=long-random-server-only-token
 ODDS_PREGAME_REFRESH_MS=900000
 ODDS_LIVE_REFRESH_MS=60000
 ODDS_PREGAME_STALE_MS=900000
@@ -86,7 +93,8 @@ The schema creates `profiles`, `transactions`, `matches`, `bets`, and `game_roun
 
 ## API routes
 
-- `GET /api/odds`: tries the configured bookmaker provider first. A bookmaker market contains `provider`, `providerEventId`, `providerLastUpdated`, `fetchedAt`, `marketSource: "bookmaker"`, `marketStatus`, and decimal selections. The app refuses malformed prices and maps only events with a provider event ID. API-Football or public scoreboards may supply fixture data for the **model fallback**, but never bookmaker prices.
+- `GET /api/odds`: in `pregame-snapshot` mode, reads only the most recently refreshed server-side bookmaker snapshot. Browser loads, frontend polling, bet-slip actions, and bet placement never trigger a paid provider request. A bookmaker market contains `marketSource: "bookmaker"`, `marketMode: "pregame-snapshot"`, `provider`, `providerEventId`, `bookmakerLastUpdated`, `fetchedAt`, pregame cutoff/expiry timestamps, and decimal h2h selections. API-Football or public scoreboards may supply fixture data for the **model fallback**, but never bookmaker prices.
+- `GET /api/cron/odds-snapshot`: Vercel Cron-only route. It makes the single paid request to The Odds API on the two-hour clock schedule and requires `CRON_SECRET`.
 - `GET /api/odds/health`: protected operational endpoint. Send `x-odds-health-token` equal to `ODDS_HEALTH_ADMIN_TOKEN`. It reports provider state, quota headers where available, last success/error, cache age, and bookmaker/model/stale market counts. It never returns keys or raw provider payloads.
 - `GET /api/football`: fetches featured soccer tournament scoreboards for the featured tournament panel.
 - `GET /api/henriquinho-sports`: local unlimited Henriquinho sports API. When `HENRIQUINHO_INTERNAL_SPORTS_ONLY=true`, `/api/odds` and `/api/football` use this internal engine and make no external sports API calls. These are generated demo markets, not real-world live sports data.
@@ -116,12 +124,11 @@ The open model is unlimited for the beta because it uses public scoreboards and 
 
 ### Bookmaker provider configuration and quota
 
-The production provider adapter is The Odds API v4. Set an active `THE_ODDS_API_KEY` in Vercel and use `ODDS_FALLBACK_MODE=disable` for a bookmaker-only release. `model` is appropriate only when clearly offering virtual Henriquinho model markets.
+The production provider adapter is The Odds API v4. The recommended 500-credit beta configuration is `ODDS_OPERATION_MODE=pregame-snapshot`, `ODDS_PROVIDER_SPORT=upcoming`, `ODDS_PROVIDER_REGIONS=us`, `ODDS_PROVIDER_MARKETS=h2h`, and `ODDS_FALLBACK_MODE=model`. Model markets remain distinct virtual markets, never bookmaker odds.
 
-- The provider's free plan currently has 500 credits per month. The odds endpoint is charged by `regions x unique markets`; the default `us` region and `h2h,spreads,totals` means **3 credits per sport refresh**. Verify current terms before launch at [The Odds API pricing](https://the-odds-api.com/) and [v4 guide](https://the-odds-api.com/liveapi/guides/v4/).
-- Default configuration polls one sport every 15 minutes pregame and every minute when a returned market is live. At the pregame cadence, one sport uses about 288 credits/day and 8,640 credits per 30-day month if traffic keeps the route warm; an active four-hour live window adds up to 720 credits per event day. This exceeds the free allowance by a wide margin. Raise `ODDS_REFRESH_SPORT_LIMIT` only after choosing a plan that covers the resulting volume. The provider exposes quota headers, and the app stops requesting for one hour once the configured safety threshold is reached.
-- The app caches one response per runtime, retries only 429/5xx responses with capped exponential backoff, honors `Retry-After` when sent, and never continuously retries a quota-exhausted response. Visible client refreshes are aligned to `:00` each minute.
-- Pregame markets suspend after 15 minutes without a provider timestamp; live markets suspend after 90 seconds. Finished, postponed, missing, malformed, and provider-failed markets cannot be bet. A selection is rechecked against its exact current price immediately before placement; the saved bet retains the source and recorded price for settlement.
+- The provider's free plan currently has 500 credits per month. The odds endpoint is charged by `regions x unique markets`; `upcoming + us + h2h` costs **1 credit per scheduled refresh**. Six two-hour cron executions per day use about 180 credits per 30-day month, leaving a 100-credit reserve. Verify terms at [The Odds API pricing](https://the-odds-api.com/) and [v4 guide](https://the-odds-api.com/liveapi/guides/v4/).
+- The cron route stops when the daily limit reaches 12, quota is exhausted, another job is running, or the provider reports 100 credits or fewer. It does not retry quota errors. Players consume the existing snapshot only.
+- Snapshot markets are pregame-only: they lock 10 minutes before kickoff and expire 135 minutes after fetch. Returned live, started, completed, postponed, missing, malformed, and provider-failed markets cannot be bet. A selection is rechecked against its exact current price immediately before placement; the saved bet retains source and recorded price for settlement.
 
 Real sportsbook-level accuracy still requires licensed historical, injury, lineup, news, and market-movement feeds. The code is ready to consume them, but the data itself must come from a licensed vendor.
 

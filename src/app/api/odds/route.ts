@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import type { Match, SportKey } from "@/lib/types";
 import { getHenriquinhoInternalSports } from "@/lib/henriquinhoSports";
-import { dedupeProviderEvents, isDecimalPrice, providerEventKey } from "@/lib/odds/marketSafety";
+import { dedupeProviderEvents, isDecimalPrice, isMarketBettable, isPregameSnapshotRequest, providerEventKey, snapshotRefreshBlockReason } from "@/lib/odds/marketSafety";
 import { requestProviderJson } from "@/lib/odds/providerClient";
 import { recordOddsHealth, updateOddsHealth } from "@/lib/odds/healthStore";
+import { readPersistedOddsSnapshot, writePersistedOddsSnapshot } from "@/lib/odds/snapshotPersistence";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -14,6 +15,7 @@ const apiFootballKeyRaw = (process.env.API_FOOTBALL_KEY ?? "").trim();
 const apiFootballKey = apiFootballKeyRaw && !apiFootballKeyRaw.includes("your-") ? apiFootballKeyRaw : undefined;
 const apiFootballRealSnapshot = process.env.API_FOOTBALL_REAL_SNAPSHOT === "true";
 const internalSportsOnly = process.env.HENRIQUINHO_INTERNAL_SPORTS_ONLY === "true";
+const oddsOperationMode = process.env.ODDS_OPERATION_MODE === "pregame-snapshot" ? "pregame-snapshot" : "continuous";
 const fallbackMode = process.env.ODDS_FALLBACK_MODE === "disable" || process.env.REAL_ODDS_ONLY === "true" ? "disable" : "model";
 const realOddsOnly = fallbackMode === "disable";
 const oddsProvider = process.env.ODDS_PROVIDER ?? "the-odds-api";
@@ -26,6 +28,10 @@ const oddsLiveStaleMs = Math.max(15_000, Number(process.env.ODDS_LIVE_STALE_MS ?
 const oddsProviderTimeoutMs = Math.max(1_000, Number(process.env.ODDS_PROVIDER_TIMEOUT_MS ?? 8_000));
 const oddsProviderMaxRetries = Math.max(0, Math.min(3, Number(process.env.ODDS_PROVIDER_MAX_RETRIES ?? 2)));
 const oddsProviderMinCredits = Math.max(0, Number(process.env.ODDS_PROVIDER_MIN_REMAINING_CREDITS ?? 20));
+const oddsMonthlyCreditReserve = Math.max(0, Number(process.env.ODDS_MONTHLY_CREDIT_RESERVE ?? 100));
+const oddsDailyRequestLimit = Math.max(1, Number(process.env.ODDS_DAILY_REQUEST_LIMIT ?? 12));
+const oddsPregameCutoffMs = Math.max(0, Number(process.env.ODDS_PREGAME_CUTOFF_MINUTES ?? 10)) * 60_000;
+const oddsBookmakerMaxAgeMs = Math.max(1, Number(process.env.ODDS_BOOKMAKER_MAX_AGE_MINUTES ?? 135)) * 60_000;
 const oddsErrorCacheTtlMs = 60 * 60 * 1000;
 const scoreboardCacheTtlMs = 60 * 1000;
 const apiFootballSnapshotCacheTtlMs = Math.max(60 * 1000, Number(process.env.API_FOOTBALL_REFRESH_MS ?? 864000));
@@ -61,6 +67,10 @@ let apiFootballStatsCache: CacheEntry<Map<number, NonNullable<Match["liveStats"]
 let apiFootballSnapshotCache: CacheEntry<Match[]> | null = null;
 let oddsProviderBlockedUntil = 0;
 let oddsProviderBlockedReason: string | null = null;
+let pregameSnapshot: CacheEntry<Match[]> | null = null;
+let pregameSnapshotRefreshInFlight = false;
+let pregameSnapshotDailyKey = "";
+let pregameSnapshotDailyRequests = 0;
 
 const realOddsSports: Array<{ key: string; sport: SportKey; league: string; country: string }> = [
   { key: "soccer_fifa_world_cup", sport: "soccer", league: "FIFA World Cup", country: "World" },
@@ -507,6 +517,10 @@ function normalizeOddsEvent(event: OddsApiEvent, config: (typeof realOddsSports)
   const providerUpdatedAt = new Date(bookmaker.last_update);
   if (!Number.isFinite(providerUpdatedAt.getTime())) return null;
   const providerLastUpdated = providerUpdatedAt.toISOString();
+  if (oddsOperationMode === "pregame-snapshot") {
+    const startsAt = new Date(event.commence_time).getTime();
+    if (status !== "upcoming" || !Number.isFinite(startsAt) || startsAt - Date.now() <= oddsPregameCutoffMs) return null;
+  }
 
   return {
     id: `bookmaker-${providerEventKey(oddsProvider, event.id)}`,
@@ -518,11 +532,17 @@ function normalizeOddsEvent(event: OddsApiEvent, config: (typeof realOddsSports)
     startsAt: event.commence_time,
     status,
     marketSource: "bookmaker",
+    ...(oddsOperationMode === "pregame-snapshot" ? { marketMode: "pregame-snapshot" as const } : {}),
     marketStatus: status === "live" || status === "upcoming" ? "open" : "closed",
     provider: oddsProvider,
     providerEventId: event.id,
     providerLastUpdated,
+    bookmakerLastUpdated: providerLastUpdated,
     fetchedAt,
+    ...(oddsOperationMode === "pregame-snapshot" ? {
+      marketCutoffAt: new Date(new Date(event.commence_time).getTime() - oddsPregameCutoffMs).toISOString(),
+      marketExpiresAt: new Date(new Date(fetchedAt).getTime() + oddsBookmakerMaxAgeMs).toISOString(),
+    } : {}),
     odds: {
       moneyline: {
         home: homePrice,
@@ -1039,6 +1059,95 @@ async function normalizeFallbackEvent(event: EspnEvent, config: (typeof fallback
   };
 }
 
+function utcDayKey(now = new Date()) {
+  return now.toISOString().slice(0, 10);
+}
+
+function resetSnapshotDailyCounter(now = new Date()) {
+  const key = utcDayKey(now);
+  if (pregameSnapshotDailyKey !== key) {
+    pregameSnapshotDailyKey = key;
+    pregameSnapshotDailyRequests = 0;
+  }
+}
+
+async function snapshotMatchesForPlayers(now = Date.now()) {
+  const persisted = await readPersistedOddsSnapshot();
+  const snapshot = persisted ? { expiresAt: persisted.expiresAt, data: persisted.matches } : pregameSnapshot;
+  if (!snapshot) return [];
+  return snapshot.data.map((match) => {
+    const reason = isMarketBettable(match, now, oddsPregameStaleMs, oddsLiveStaleMs) ? null : "Pregame bookmaker snapshot is no longer bettable";
+    return reason ? suspendBookmakerMarkets([match], reason)[0] : match;
+  });
+}
+
+export async function refreshPregameBookmakerSnapshot() {
+  if (oddsOperationMode !== "pregame-snapshot") return { refreshed: false, reason: "Pregame snapshot mode is disabled" };
+  if (oddsProvider !== "the-odds-api" || !oddsApiKey) {
+    updateOddsHealth({ provider: oddsProvider, configured: false, status: "unconfigured", lastError: "THE_ODDS_API_KEY is not configured" });
+    return { refreshed: false, reason: "Bookmaker provider is not configured" };
+  }
+  resetSnapshotDailyCounter();
+  const blocked = snapshotRefreshBlockReason({ refreshInFlight: pregameSnapshotRefreshInFlight, dailyRequests: pregameSnapshotDailyRequests, dailyLimit: oddsDailyRequestLimit, reserveCredits: oddsMonthlyCreditReserve });
+  if (blocked) {
+    updateOddsHealth({ provider: oddsProvider, configured: true, status: "degraded", lastError: blocked });
+    return { refreshed: false, reason: blocked };
+  }
+  if (Date.now() < oddsProviderBlockedUntil) return { refreshed: false, reason: oddsProviderBlockedReason ?? "Bookmaker provider is temporarily paused" };
+
+  pregameSnapshotRefreshInFlight = true;
+  try {
+    const url = new URL(`https://api.the-odds-api.com/v4/sports/${process.env.ODDS_PROVIDER_SPORT ?? "upcoming"}/odds`);
+    url.searchParams.set("apiKey", oddsApiKey);
+    url.searchParams.set("regions", oddsRegions);
+    url.searchParams.set("markets", "h2h");
+    url.searchParams.set("oddsFormat", "decimal");
+    url.searchParams.set("dateFormat", "iso");
+    if (!isPregameSnapshotRequest({ sport: process.env.ODDS_PROVIDER_SPORT ?? "upcoming", regions: oddsRegions, markets: "h2h", oddsFormat: "decimal" })) {
+      return { refreshed: false, reason: "Pregame snapshot provider configuration is invalid" };
+    }
+    pregameSnapshotDailyRequests += 1;
+    const result = await requestProviderJson<OddsApiEvent[]>(url.toString(), { timeoutMs: oddsProviderTimeoutMs, maxRetries: 0 });
+    updateOddsHealth({
+      provider: oddsProvider,
+      configured: true,
+      remainingCredits: result.quota.remainingCredits,
+      usedCredits: result.quota.usedCredits,
+      lastRequestCost: result.quota.lastRequestCost,
+      dailyRequestsUsed: pregameSnapshotDailyRequests,
+      dailyRequestLimit: oddsDailyRequestLimit,
+      monthlyCreditReserve: oddsMonthlyCreditReserve,
+      operationMode: "pregame-snapshot",
+    });
+    if (!result.data) {
+      const exhausted = result.exhausted || result.rateLimited || (result.quota.remainingCredits !== undefined && result.quota.remainingCredits <= oddsMonthlyCreditReserve);
+      if (exhausted) {
+        oddsProviderBlockedUntil = Date.now() + oddsErrorCacheTtlMs;
+        oddsProviderBlockedReason = result.error ?? "Provider quota safety circuit breaker is active";
+      }
+      updateOddsHealth({ provider: oddsProvider, configured: true, status: result.exhausted ? "quota_exhausted" : result.rateLimited ? "rate_limited" : "error", lastError: result.error });
+      return { refreshed: false, reason: result.error ?? "Provider request failed" };
+    }
+    if (result.quota.remainingCredits !== undefined && result.quota.remainingCredits <= oddsMonthlyCreditReserve) {
+      oddsProviderBlockedUntil = Date.now() + oddsErrorCacheTtlMs;
+      oddsProviderBlockedReason = `Provider reserve reached (${result.quota.remainingCredits} credits remaining)`;
+    }
+    const matches = dedupeProviderEvents(result.data
+      .map((event) => {
+        const config = realOddsSports.find((sport) => sport.key === event.sport_key);
+        return config ? normalizeOddsEvent(event, config) : null;
+      })
+      .filter((match): match is Match => Boolean(match)));
+    pregameSnapshot = { expiresAt: Date.now() + oddsBookmakerMaxAgeMs, data: matches };
+    await writePersistedOddsSnapshot({ matches, expiresAt: pregameSnapshot.expiresAt, fetchedAt: new Date().toISOString() });
+    recordOddsHealth(matches, Date.now(), oddsPregameStaleMs, oddsLiveStaleMs);
+    updateOddsHealth({ provider: oddsProvider, configured: true, status: "healthy", lastSuccessfulRequestAt: new Date().toISOString(), lastError: undefined });
+    return { refreshed: true, markets: matches.length, nextRefreshAt: new Date(Math.ceil(Date.now() / (2 * 60 * 60 * 1000)) * 2 * 60 * 60 * 1000).toISOString() };
+  } finally {
+    pregameSnapshotRefreshInFlight = false;
+  }
+}
+
 function relevantOddsSportKeys(referenceMatches: Match[]) {
   const current = referenceMatches.filter((match) => match.status === "live" || match.status === "upcoming");
   return new Set(
@@ -1184,6 +1293,38 @@ export async function GET() {
       message: "Henriquinho internal sports API loaded. No external sports providers are being used.",
     };
     return NextResponse.json(payload, { headers: { "Cache-Control": "private, max-age=5" } });
+  }
+
+  // Player traffic is cache-only in snapshot mode. The only paid request is made
+  // by the Vercel cron route below, never by this public endpoint.
+  if (oddsOperationMode === "pregame-snapshot") {
+    const bookmakerMatches = await snapshotMatchesForPlayers();
+    if (bookmakerMatches.some((match) => match.marketStatus === "open")) {
+      const payload: OddsPayload = {
+        source: "odds-api",
+        oddsSource: "real-provider",
+        configured: Boolean(oddsApiKey),
+        realOddsOnly,
+        matches: bookmakerMatches,
+        message: "Pregame bookmaker odds snapshot loaded.",
+        fallbackMode,
+      };
+      recordOddsHealth(bookmakerMatches, Date.now(), oddsPregameStaleMs, oddsLiveStaleMs);
+      return NextResponse.json(payload, { headers: { "Cache-Control": "private, max-age=30" } });
+    }
+    const fallback = await getFallbackOdds().catch(() => []);
+    const matches = realOddsOnly ? fallback.map(stripEstimatedMarkets) : fallback;
+    const payload: OddsPayload = {
+      source: realOddsOnly ? "espn-public" : "henriquinho-model",
+      oddsSource: realOddsOnly ? "unavailable" : "model-provider",
+      configured: Boolean(oddsApiKey),
+      realOddsOnly,
+      matches,
+      message: fallbackMode === "model" ? "Henriquinho model markets loaded while the pregame bookmaker snapshot is unavailable." : "No current bookmaker snapshot is available.",
+      fallbackMode,
+    };
+    recordOddsHealth(matches, Date.now(), oddsPregameStaleMs, oddsLiveStaleMs);
+    return NextResponse.json(payload, { headers: { "Cache-Control": "private, max-age=30" } });
   }
 
   // A fixture provider can supply real fixtures to the model, but it is never allowed

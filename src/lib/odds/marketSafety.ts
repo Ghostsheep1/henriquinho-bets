@@ -1,6 +1,7 @@
 import type { BetPick, Match } from "@/lib/types";
 
 export type FallbackMode = "disable" | "model";
+export type PregameSnapshotRequest = { sport: string; regions: string; markets: string; oddsFormat: string };
 
 export type ProviderHealthStatus = "unconfigured" | "healthy" | "degraded" | "rate_limited" | "quota_exhausted" | "error";
 
@@ -18,10 +19,27 @@ export type ProviderHealth = {
   bookmakerEvents: number;
   modelEvents: number;
   staleOrSuspendedEvents: number;
+  operationMode?: "pregame-snapshot" | "continuous";
+  dailyRequestsUsed?: number;
+  dailyRequestLimit?: number;
+  monthlyCreditReserve?: number;
+  nextScheduledSyncAt?: string;
 };
 
 export function isDecimalPrice(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 1;
+}
+
+export function isPregameSnapshotRequest(request: PregameSnapshotRequest) {
+  return request.sport === "upcoming" && request.regions === "us" && request.markets === "h2h" && request.oddsFormat === "decimal";
+}
+
+export function snapshotRefreshBlockReason(input: { refreshInFlight: boolean; dailyRequests: number; dailyLimit: number; remainingCredits?: number; reserveCredits: number; exhausted?: boolean }) {
+  if (input.refreshInFlight) return "A snapshot refresh is already running";
+  if (input.exhausted) return "Provider quota is exhausted";
+  if (input.dailyRequests >= input.dailyLimit) return "Daily bookmaker request limit reached";
+  if (input.remainingCredits !== undefined && input.remainingCredits <= input.reserveCredits) return "Provider credit reserve reached";
+  return null;
 }
 
 export function providerEventKey(provider: string, providerEventId: string) {
@@ -35,6 +53,16 @@ export function dedupeProviderEvents<T extends { id: string }>(events: T[]) {
 export function marketFreshnessReason(match: Match, now: number, pregameMaxAgeMs: number, liveMaxAgeMs: number) {
   if (!match.odds || match.marketStatus !== "open") return match.suspensionReason ?? "market unavailable";
   if (match.status === "finished" || match.status === "postponed") return "event closed";
+  if (match.marketMode === "pregame-snapshot") {
+    const startsAt = new Date(match.startsAt).getTime();
+    if (!Number.isFinite(startsAt) || startsAt <= now) return "event has started";
+    const cutoffAt = new Date(match.marketCutoffAt ?? startsAt - 10 * 60_000).getTime();
+    if (!Number.isFinite(cutoffAt) || now >= cutoffAt) return "pregame cutoff reached";
+    const fetchedAt = new Date(match.fetchedAt ?? "").getTime();
+    if (!Number.isFinite(fetchedAt)) return "missing snapshot timestamp";
+    const expiresAt = new Date(match.marketExpiresAt ?? fetchedAt + 135 * 60_000).getTime();
+    if (!Number.isFinite(expiresAt) || now >= expiresAt) return "bookmaker snapshot expired";
+  }
   const updatedAt = new Date(match.providerLastUpdated ?? match.oddsUpdatedAt ?? match.fetchedAt ?? "").getTime();
   if (!Number.isFinite(updatedAt)) return "missing provider timestamp";
   const maxAge = match.status === "live" ? liveMaxAgeMs : pregameMaxAgeMs;

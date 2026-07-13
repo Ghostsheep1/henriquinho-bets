@@ -29,9 +29,13 @@ export type Match = {
   };
   oddsSource?: "real-provider" | "model-provider" | "calculated-demo";
   marketSource?: "bookmaker" | "henriquinho-model";
+  marketMode?: "pregame-snapshot" | "model";
   provider?: string;
   providerEventId?: string;
   providerLastUpdated?: string;
+  bookmakerLastUpdated?: string;
+  marketCutoffAt?: string;
+  marketExpiresAt?: string;
   fetchedAt?: string;
   marketStatus?: "open" | "suspended" | "closed";
   suspensionReason?: string;
@@ -81,6 +85,7 @@ export type BetPick = {
   event: string;
   maxStake?: number;
   source?: "bookmaker" | "henriquinho-model";
+  marketMode?: "pregame-snapshot" | "model";
   provider?: string;
   providerEventId?: string;
   providerLastUpdated?: string;
