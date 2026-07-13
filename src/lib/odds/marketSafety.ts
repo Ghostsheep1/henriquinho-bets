@@ -19,7 +19,7 @@ export type ProviderHealth = {
   bookmakerEvents: number;
   modelEvents: number;
   staleOrSuspendedEvents: number;
-  operationMode?: "pregame-snapshot" | "continuous";
+  operationMode?: "model-only" | "pregame-snapshot" | "bookmaker-only" | "continuous";
   dailyRequestsUsed?: number;
   dailyRequestLimit?: number;
   monthlyCreditReserve?: number;
