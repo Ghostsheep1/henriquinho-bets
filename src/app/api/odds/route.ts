@@ -1039,7 +1039,16 @@ async function normalizeFallbackEvent(event: EspnEvent, config: (typeof fallback
   };
 }
 
-async function getRealOdds() {
+function relevantOddsSportKeys(referenceMatches: Match[]) {
+  const current = referenceMatches.filter((match) => match.status === "live" || match.status === "upcoming");
+  return new Set(
+    realOddsSports
+      .filter((config) => current.some((match) => match.sport === config.sport && match.league === config.league))
+      .map((config) => config.key),
+  );
+}
+
+async function getRealOdds(referenceMatches: Match[] = []) {
   if (oddsProvider !== "the-odds-api" || !oddsApiKey) {
     updateOddsHealth({ provider: oddsProvider, configured: false, status: "unconfigured", lastError: "THE_ODDS_API_KEY is not configured" });
     return null;
@@ -1075,8 +1084,9 @@ async function getRealOdds() {
     activeSportsCache = { expiresAt: Date.now() + 60 * 60 * 1000, data: activeKeys };
   }
 
+  const relevantKeys = relevantOddsSportKeys(referenceMatches);
   const configs = realOddsSports
-    .filter((config) => activeKeys?.has(config.key))
+    .filter((config) => activeKeys?.has(config.key) && relevantKeys.has(config.key))
     .sort((a, b) => {
       const aRank = oddsRefreshPriority.indexOf(a.key as (typeof oddsRefreshPriority)[number]);
       const bRank = oddsRefreshPriority.indexOf(b.key as (typeof oddsRefreshPriority)[number]);
@@ -1210,7 +1220,11 @@ export async function GET() {
   }
 
   try {
-    const realOdds = await getRealOdds();
+    // The public scoreboard determines which sports are currently relevant. It is
+    // never used to create or relabel a bookmaker market, and it prevents provider
+    // credits being spent on an in-season sport with no current event.
+    const fallback = await getFallbackOdds().catch(() => []);
+    const realOdds = await getRealOdds(fallback);
     if (realOdds?.matches.length) {
       const payload: OddsPayload = {
         source: "odds-api",
@@ -1227,7 +1241,6 @@ export async function GET() {
       return NextResponse.json(payload, { headers: { "Cache-Control": "private, max-age=10" } });
     }
 
-    const fallback = await getFallbackOdds();
     const matches = realOddsOnly ? fallback.map(stripEstimatedMarkets) : fallback;
     const payload: OddsPayload = {
       source: realOddsOnly ? "espn-public" : "henriquinho-model",
