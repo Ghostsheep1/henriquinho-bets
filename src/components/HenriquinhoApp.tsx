@@ -421,43 +421,6 @@ function resetLedger() {
   return starterTransactions.map((transaction) => ({ ...transaction, id: uid("txn"), createdAt: new Date().toISOString() }));
 }
 
-function matchKey(match: Match) {
-  const date = Number.isFinite(new Date(match.startsAt).getTime()) ? new Date(match.startsAt).toISOString().slice(0, 10) : match.startsAt;
-  return `${match.sport}:${match.league}:${match.home}:${match.away}:${date}`.toLowerCase();
-}
-
-function mergeMatch(existing: Match | undefined, incoming: Match) {
-  if (!existing) return incoming;
-  const incomingHasOdds = hasPlayableOdds(incoming);
-  const existingHasOdds = hasPlayableOdds(existing);
-  if (incomingHasOdds || (!existingHasOdds && incoming.source === "odds-api")) {
-    return {
-      ...existing,
-      ...incoming,
-      score: incoming.score ?? existing.score,
-      minute: incoming.minute ?? existing.minute,
-      odds: incoming.odds ?? existing.odds,
-      oddsSource: incoming.oddsSource ?? existing.oddsSource,
-      oddsProvider: incoming.oddsProvider ?? existing.oddsProvider,
-      oddsUpdatedAt: incoming.oddsUpdatedAt ?? existing.oddsUpdatedAt,
-    };
-  }
-  return {
-    ...incoming,
-    ...existing,
-    score: incoming.score ?? existing.score,
-    minute: incoming.minute ?? existing.minute,
-    odds: existing.odds ?? incoming.odds,
-    oddsSource: existing.oddsSource ?? incoming.oddsSource,
-    oddsProvider: existing.oddsProvider ?? incoming.oddsProvider,
-    oddsUpdatedAt: existing.oddsUpdatedAt ?? incoming.oddsUpdatedAt,
-  };
-}
-
-function hasPlayableOdds(match: Match) {
-  return Boolean(match.odds?.moneyline.home && match.odds.moneyline.away);
-}
-
 function isFreshMarket(match: Match) {
   const startsAt = new Date(match.startsAt).getTime();
   if (!Number.isFinite(startsAt)) return match.status === "live";
@@ -616,20 +579,12 @@ function useLiveSports(pollMs: number) {
       refreshInFlightRef.current = true;
       if (!loadedRef.current) setLoading(true);
       try {
-        const [oddsResponse, footballResponse] = await Promise.all([
-          fetch("/api/odds", { cache: "no-store" }),
-          fetch("/api/football", { cache: "no-store" }),
-        ]);
+        // Sportsbook cards must come from one market feed. The former client-side
+        // merge with /api/football could replace a priced event with its fixture-only
+        // counterpart after an otherwise successful odds refresh.
+        const oddsResponse = await fetch("/api/odds", { cache: "no-store" });
         const odds = (await oddsResponse.json()) as SportsPayload;
-        const football = (await footballResponse.json()) as SportsPayload;
-        const byId = new Map<string, Match>();
-
-        for (const match of [...(football.matches ?? []), ...(odds.matches ?? [])]) {
-          const key = matchKey(match);
-          byId.set(key, mergeMatch(byId.get(key), match));
-        }
-
-        const freshMatches = Array.from(byId.values())
+        const freshMatches = (odds.matches ?? [])
           .filter(isFreshMarket)
           .sort((a, b) => {
             if (a.status === "live" && b.status !== "live") return -1;
@@ -639,7 +594,7 @@ function useLiveSports(pollMs: number) {
 
         if (!active) return;
         setMatches(freshMatches);
-        setWorldCup((football.worldCup ?? []).filter(isFreshMarket));
+        setWorldCup(freshMatches.filter((match) => ["FIFA World Cup", "UEFA Euro", "Olympic Soccer", "FIFA Women's World Cup"].includes(match.league)));
         setMessage(odds.message || "Henriquinho model odds loaded");
         loadedRef.current = true;
       } catch {
