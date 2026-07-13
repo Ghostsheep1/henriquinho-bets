@@ -7,7 +7,7 @@ import HenriquinhoApp from "@/components/HenriquinhoApp";
 import { canResendVerification, isAdultBirthDate, mayAccessPlayer, type AccountStatus, type AppRole } from "@/lib/auth";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 
-type Profile = { display_name: string; balance: number; role: AppRole; account_status: AccountStatus };
+type Profile = { display_name: string; balance: number; role: AppRole; account_status: AccountStatus; is_guest: boolean };
 type Screen = "login" | "signup" | "forgot" | "reset" | "verify";
 
 function redirectUrl(path = "/") {
@@ -28,6 +28,8 @@ export default function AuthPortal({ screen = "login", redirectAuthenticated = f
   const [busy, setBusy] = useState(false);
   const [resendAt, setResendAt] = useState(0);
   const [destination, setDestination] = useState("/");
+  const googleEnabled = process.env.NEXT_PUBLIC_GOOGLE_AUTH_ENABLED === "true";
+  const appleEnabled = process.env.NEXT_PUBLIC_APPLE_AUTH_ENABLED === "true";
 
   const activeScreen = useMemo<Screen>(() => screen, [screen]);
 
@@ -43,7 +45,7 @@ export default function AuthPortal({ screen = "login", redirectAuthenticated = f
     const load = async () => {
       const { data } = await client.auth.getUser();
       const user = data.user;
-      if (!alive || !user?.email_confirmed_at) { setSessionReady(true); return; }
+      if (!alive || (!user?.email_confirmed_at && !user?.is_anonymous)) { setSessionReady(true); return; }
       setEmail(user.email ?? "");
       const metadata = user.user_metadata ?? {};
       const pending = typeof window !== "undefined" ? window.sessionStorage.getItem("henriquinho-pending-profile") : null;
@@ -57,7 +59,8 @@ export default function AuthPortal({ screen = "login", redirectAuthenticated = f
         });
         window.sessionStorage.removeItem("henriquinho-pending-profile");
       }
-      const result = await client.from("profiles").select("display_name,balance,role,account_status").eq("id", user.id).maybeSingle();
+      if (user.is_anonymous) await client.rpc("ensure_my_guest_profile");
+      const result = await client.from("profiles").select("display_name,balance,role,account_status,is_guest").eq("id", user.id).maybeSingle();
       if (!alive) return;
       setProfile(result.data as Profile | null);
       setSessionReady(true);
@@ -104,6 +107,8 @@ export default function AuthPortal({ screen = "login", redirectAuthenticated = f
 
   const oauth = async (provider: "google" | "apple") => {
     if (!supabase) return;
+    if (provider === "google" && !googleEnabled) { setError("Google sign-in is not available yet."); return; }
+    if (provider === "apple" && !appleEnabled) { setError("Apple sign-in is not available yet."); return; }
     if (activeScreen === "signup") {
       if (!isAdultBirthDate(birthDate)) { setError("You must be at least 18 years old to create an account."); return; }
       if (!termsAccepted) { setError("You must accept the Terms of Service and Privacy Policy."); return; }
@@ -111,7 +116,15 @@ export default function AuthPortal({ screen = "login", redirectAuthenticated = f
     }
     setBusy(true); setError("");
     const { error: oauthError } = await supabase.auth.signInWithOAuth({ provider, options: { redirectTo: redirectUrl(destination) } });
-    if (oauthError) { setError(oauthError.message); setBusy(false); }
+    if (oauthError) { setError(provider === "google" ? "Google sign-in is not available yet." : "Apple sign-in is not available yet."); setBusy(false); }
+  };
+
+  const tryGuest = async () => {
+    if (!supabase) return;
+    setBusy(true); setError(""); setNotice("");
+    const { error: guestError } = await supabase.auth.signInAnonymously();
+    setBusy(false);
+    if (guestError) setError("Guest access is not available right now. Please try again later.");
   };
 
   const resend = async () => {
@@ -124,11 +137,11 @@ export default function AuthPortal({ screen = "login", redirectAuthenticated = f
 
   const signOut = async () => { await supabase?.auth.signOut(); setProfile(null); router.replace("/login"); };
 
-  if (!isSupabaseConfigured) return <AuthShell title="Authentication setup required"><p className="text-sm text-slate-300">Add the public Supabase URL and anon key to enable sign-in.</p></AuthShell>;
+  if (!isSupabaseConfigured) return <AuthShell title="Authentication setup required"><p className="text-sm text-slate-300">Add the Supabase URL and publishable key to enable sign-in.</p></AuthShell>;
   if (!sessionReady) return <AuthShell title="Checking session"><Loader2 className="animate-spin text-emerald-300" /></AuthShell>;
   if (profile) {
     if (!mayAccessPlayer(profile.account_status)) return <AuthShell title="Account unavailable"><p className="text-sm text-slate-300">This account is {profile.account_status}. Contact support for help.</p><button onClick={signOut} className="mt-4 rounded bg-emerald-400 px-4 py-2 font-bold text-black">Sign out</button></AuthShell>;
-    return <HenriquinhoApp authenticatedUser={{ name: profile.display_name, email, admin: profile.role === "admin", balance: profile.balance }} onAuthenticatedSignOut={signOut} />;
+    return <HenriquinhoApp authenticatedUser={{ name: profile.display_name, email, admin: profile.role === "admin", guest: profile.is_guest, balance: profile.balance }} onAuthenticatedSignOut={signOut} />;
   }
 
   const verify = activeScreen === "verify";
@@ -138,12 +151,12 @@ export default function AuthPortal({ screen = "login", redirectAuthenticated = f
       {activeScreen !== "reset" && <Field label="Email" value={email} onChange={setEmail} type="email" autoComplete="email" />}
       {!verify && activeScreen !== "forgot" && <Field label="Password" value={password} onChange={setPassword} type="password" autoComplete={activeScreen === "signup" ? "new-password" : "current-password"} />}
       {verify ? <button type="button" disabled={busy || !canResendVerification(resendAt)} onClick={resend} className="w-full rounded bg-emerald-400 py-3 font-black text-black disabled:opacity-50">Resend verification email</button> : <button disabled={busy} className="w-full rounded bg-emerald-400 py-3 font-black text-black disabled:opacity-50">{busy ? "Please wait" : activeScreen === "signup" ? "Create account" : activeScreen === "forgot" ? "Send reset email" : activeScreen === "reset" ? "Update password" : "Sign in"}</button>}
-      {(activeScreen === "login" || activeScreen === "signup") && <><div className="flex items-center gap-3 text-xs text-slate-500"><span className="h-px flex-1 bg-white/10" />or<span className="h-px flex-1 bg-white/10" /></div><button type="button" disabled={busy} onClick={() => oauth("google")} className="flex w-full items-center justify-center gap-2 rounded border border-white/15 py-3 font-bold"><Globe2 className="h-4 w-4" />Continue with Google</button><button type="button" disabled={busy} onClick={() => oauth("apple")} className="flex w-full items-center justify-center gap-2 rounded border border-white/15 py-3 font-bold"><Apple className="h-4 w-4" />Continue with Apple</button></>}
+      {(activeScreen === "login" || activeScreen === "signup") && <><button type="button" disabled={busy} onClick={tryGuest} className="w-full rounded border border-amber-300/40 bg-amber-300/10 py-3 font-black text-amber-100 disabled:opacity-50">Try as Guest</button><p className="text-center text-xs text-slate-400">Guest progress is saved on this browser. Create an account later to keep it across devices.</p><div className="flex items-center gap-3 text-xs text-slate-500"><span className="h-px flex-1 bg-white/10" />or<span className="h-px flex-1 bg-white/10" /></div><button type="button" disabled={busy || !googleEnabled} onClick={() => oauth("google")} className="flex w-full items-center justify-center gap-2 rounded border border-white/15 py-3 font-bold disabled:cursor-not-allowed disabled:opacity-45"><Globe2 className="h-4 w-4" />{googleEnabled ? "Continue with Google" : "Google coming soon"}</button><button type="button" disabled={busy || !appleEnabled} onClick={() => oauth("apple")} className="flex w-full items-center justify-center gap-2 rounded border border-white/15 py-3 font-bold disabled:cursor-not-allowed disabled:opacity-45"><Apple className="h-4 w-4" />{appleEnabled ? "Continue with Apple" : "Apple coming soon"}</button></>}
     </form>
     {notice && <p className="mt-4 rounded bg-emerald-400/10 p-3 text-sm text-emerald-100">{notice}</p>}{error && <p className="mt-4 rounded bg-red-500/10 p-3 text-sm text-red-100">{error}</p>}
-    <div className="mt-5 flex flex-wrap gap-3 text-sm text-emerald-200"><a href="/login">Sign in</a><a href="/signup">Create account</a><a href="/forgot-password">Forgot password?</a></div>
+    <div className="mt-5 flex flex-wrap gap-3 text-sm text-emerald-200">{activeScreen !== "login" && <a href="/login">Sign in</a>}{activeScreen !== "signup" && activeScreen !== "forgot" && <a href="/signup">Create account</a>}{activeScreen !== "forgot" && <a href="/forgot-password">Forgot password?</a>}</div>
   </AuthShell>;
 }
 
 function Field({ label, value, onChange, type = "text", autoComplete }: { label: string; value: string; onChange: (value: string) => void; type?: string; autoComplete?: string }) { return <label className="block text-sm font-bold text-slate-200">{label}<input required type={type} autoComplete={autoComplete} value={value} onChange={(event) => onChange(event.target.value)} className="mt-1 w-full rounded border border-white/15 bg-black/30 px-3 py-3 outline-none ring-emerald-300 focus:ring-2" /></label>; }
-function AuthShell({ title, children }: { title: string; children: React.ReactNode }) { return <main className="flex min-h-screen items-center justify-center bg-[#070a0c] p-4 text-slate-100"><section className="w-full max-w-md rounded-md border border-white/10 bg-[#0b1210] p-6 shadow-2xl"><div className="mb-4 flex items-center gap-3"><ShieldCheck className="h-7 w-7 text-emerald-300" /><h1 className="text-2xl font-black">{title}</h1></div>{children}</section></main>; }
+function AuthShell({ title, children }: { title: string; children: React.ReactNode }) { return <main className="flex min-h-screen items-center justify-center bg-[#070a0c] p-4 text-slate-100"><section className="w-full max-w-md rounded-md border border-white/10 bg-[#0b1210] p-6 shadow-2xl"><div className="mb-4 flex items-center gap-3"><ShieldCheck className="h-7 w-7 text-emerald-300" /><div><div className="font-black text-amber-300">HenriquinhoBets</div><h1 className="text-2xl font-black">{title}</h1></div></div>{children}</section></main>; }
