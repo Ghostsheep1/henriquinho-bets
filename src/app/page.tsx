@@ -1,5 +1,5 @@
-import HenriquinhoApp from "@/components/HenriquinhoApp";
+import AuthPortal from "@/components/AuthPortal";
 
 export default function Home() {
-  return <HenriquinhoApp />;
+  return <AuthPortal />;
 }
