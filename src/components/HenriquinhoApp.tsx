@@ -578,7 +578,7 @@ function cashOutOffer(bet: Bet, matchById: Map<string, Match>) {
   return Math.max(1, Math.floor((bet.potentialWin / currentCombined) * 0.96));
 }
 
-function useLiveSports(pollMs: number) {
+function useLiveSports() {
   const [matches, setMatches] = useState<Match[]>([]);
   const [worldCup, setWorldCup] = useState<Match[]>([]);
   const [loading, setLoading] = useState(true);
@@ -627,12 +627,20 @@ function useLiveSports(pollMs: number) {
     };
 
     load();
-    const timer = window.setInterval(load, pollMs);
+    let timer: number | undefined;
+    const scheduleNextMinute = () => {
+      const delay = 60_000 - (Date.now() % 60_000);
+      timer = window.setTimeout(async () => {
+        await load();
+        if (active) scheduleNextMinute();
+      }, delay);
+    };
+    scheduleNextMinute();
     return () => {
       active = false;
-      window.clearInterval(timer);
+      if (timer) window.clearTimeout(timer);
     };
-  }, [pollMs]);
+  }, []);
 
   return { matches, worldCup, loading, message };
 }
@@ -716,7 +724,7 @@ export default function HenriquinhoApp() {
   const [lastBonus, setLastBonus] = useState<string | null>(null);
   const [depositOpen, setDepositOpen] = useState(false);
   const [soundOn, setSoundOn] = useState(true);
-  const { matches, worldCup, loading, message } = useLiveSports(active === "live" ? 15000 : 30000);
+  const { matches, worldCup, loading, message } = useLiveSports();
   const matchById = useMemo(() => new Map(matches.map((match) => [match.id, match])), [matches]);
 
   useEffect(() => {
@@ -1389,7 +1397,7 @@ function MatchCard({ match, addPick, slip, isAdmin }: { match: Match; addPick: (
           {paused ? "Odds refresh locked" : match.status === "finished" ? "Final" : "Odds unavailable"}
         </div>}
       </div>
-      {isAdmin && match.odds && match.oddsUpdatedAt && <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500"><span className="font-semibold text-slate-400">Market status</span><span aria-hidden>•</span><span>{realOdds ? match.oddsProvider ?? "Bookmaker feed" : "Virtual model market"}</span><span aria-hidden>•</span><span>Refreshed {new Date(match.oddsUpdatedAt).toLocaleTimeString()}</span></div>}
+      {isAdmin && match.odds && match.oddsUpdatedAt && <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500"><span className="font-semibold text-slate-400">Market status</span><span aria-hidden>•</span><span>{realOdds ? match.oddsProvider ?? "Bookmaker feed" : "Virtual model market"}</span><span aria-hidden>•</span><span>Refreshed {new Date(match.oddsUpdatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span></div>}
       {paused && <div className="mt-3 rounded-md border border-red-300/20 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-100">{match.trader?.suspended ? `Market suspended${match.trader.note ? `: ${match.trader.note}` : ""}` : "Live betting paused until the odds provider refreshes this market."}</div>}
       {picks.length === 0 && <div className="mt-4 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-3 text-sm text-amber-100">{paused ? "Waiting for fresh live odds" : bettingOpen ? "No odds are available for this event yet." : "Betting closed"}</div>}
       {match.liveStats && <LiveStatsPanel match={match} />}

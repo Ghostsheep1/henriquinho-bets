@@ -20,7 +20,7 @@ const oddsErrorCacheTtlMs = 60 * 60 * 1000;
 const scoreboardCacheTtlMs = 60 * 1000;
 const apiFootballSnapshotCacheTtlMs = Math.max(60 * 1000, Number(process.env.API_FOOTBALL_REFRESH_MS ?? 864000));
 const maxOddsSportsPerRefresh = Math.max(1, Number(process.env.ODDS_REFRESH_SPORT_LIMIT ?? 8));
-const modelVersion = "HENQ-OPEN-ODDS-3.0";
+const modelVersion = "HENQ-OPEN-ODDS-3.1";
 const defaultMaxMarketStake = Number(process.env.DEFAULT_MARKET_MAX_STAKE ?? 250);
 
 type OddsPayload = {
@@ -45,6 +45,8 @@ let licensedSignalsCache: CacheEntry<{ records: Record<LicensedFeedKind, License
 let apiFootballFixtureCache: CacheEntry<ApiFootballFixture[]> | null = null;
 let apiFootballStatsCache: CacheEntry<Map<number, NonNullable<Match["liveStats"]>>> | null = null;
 let apiFootballSnapshotCache: CacheEntry<Match[]> | null = null;
+let oddsProviderBlockedUntil = 0;
+let oddsProviderBlockedReason: string | null = null;
 
 const realOddsSports: Array<{ key: string; sport: SportKey; league: string; country: string }> = [
   { key: "soccer_fifa_world_cup", sport: "soccer", league: "FIFA World Cup", country: "World" },
@@ -275,13 +277,8 @@ function normalizeName(name: string) {
   return name.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-function hashUnit(seed: string) {
-  let hash = 2166136261;
-  for (let index = 0; index < seed.length; index += 1) {
-    hash ^= seed.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return ((hash >>> 0) % 10000) / 10000;
+function nextMinuteBoundary() {
+  return (Math.floor(Date.now() / 60_000) + 1) * 60_000;
 }
 
 function emptyFeedStatus(): FeedStatus {
@@ -449,17 +446,6 @@ function normalizeHeatmap(values?: number[]) {
   return cells.map((value) => Math.round((value / max) * 100));
 }
 
-function marketCycle(startsAt: string) {
-  const starts = new Date(startsAt).getTime();
-  const base = Number.isFinite(starts) ? starts : Date.now();
-  return Math.floor((Date.now() + base) / (5 * 60 * 1000));
-}
-
-function movementSignal(context: ModelContext) {
-  const cycle = marketCycle(context.startsAt);
-  return (hashUnit(`${cycle}:${context.league}:${context.home.name}:${context.away.name}:steam`) - 0.5) * 0.055;
-}
-
 async function providerError(response: Response, label: string) {
   const text = await response.text().catch(() => "");
   try {
@@ -560,10 +546,18 @@ function stripEstimatedMarkets(match: Match): Match {
   };
 }
 
-function recordStrength(summary?: string, fallback = 0.5) {
+function recordParts(summary?: string) {
   const [wins, losses, draws] = summary?.split("-").map(Number) ?? [];
-  if (!Number.isFinite(wins) || !Number.isFinite(losses) || wins + losses + (draws || 0) === 0) return fallback;
-  return clamp((wins + 0.5 * (draws || 0)) / (wins + losses + (draws || 0)), 0.18, 0.82);
+  const games = (Number.isFinite(wins) ? wins : 0) + (Number.isFinite(losses) ? losses : 0) + (Number.isFinite(draws) ? draws : 0);
+  return { wins: Number.isFinite(wins) ? wins : 0, draws: Number.isFinite(draws) ? draws : 0, games };
+}
+
+function recordStrength(summary?: string, fallback = 0.5) {
+  const { wins, draws, games } = recordParts(summary);
+  if (!games) return fallback;
+  // Eight prior games prevent a short early-season record from overpricing a team.
+  const priorGames = 8;
+  return clamp((wins + 0.5 * draws + fallback * priorGames) / (games + priorGames), 0.18, 0.82);
 }
 
 const leagueStrength: Record<string, number> = {
@@ -595,11 +589,8 @@ const sportProfiles: Record<SportKey, { draw: number; total: number; spreadStep:
 
 function teamPower(team: TeamModelInput, context: ModelContext) {
   const record = recordStrength(team.record, team.homeAway === "home" ? 0.52 : 0.48);
-  const seededQuality = 0.28 + hashUnit(`${context.sport}:${context.league}:${team.name}:rating`) * 0.54;
-  const publicSignal = (hashUnit(`${new Date().toISOString().slice(0, 10)}:${team.name}:public-signal`) - 0.5) * 0.1;
-  const leagueBoost = (leagueStrength[context.league] ?? 0.55) * 0.08;
   const homeBoost = team.homeAway === "home" ? sportProfiles[context.sport].homeAdv : 0;
-  return clamp(record * 0.46 + seededQuality * 0.34 + leagueBoost + homeBoost + publicSignal, 0.12, 1.04);
+  return clamp(record + homeBoost, 0.12, 1.04);
 }
 
 function liveAdjustment(context: ModelContext) {
@@ -628,11 +619,10 @@ function timeAdjustment(startsAt: string) {
 }
 
 function modelConfidence(context: ModelContext, closeness: number) {
-  const hasHomeRecord = Boolean(context.home.record);
-  const hasAwayRecord = Boolean(context.away.record);
+  const recordCoverage = clamp((recordParts(context.home.record).games + recordParts(context.away.record).games) / 30, 0, 1);
   const startsAt = new Date(context.startsAt).getTime();
   const hoursUntilStart = Number.isFinite(startsAt) ? Math.abs(startsAt - Date.now()) / (60 * 60 * 1000) : 999;
-  const recordScore = (hasHomeRecord ? 0.18 : 0) + (hasAwayRecord ? 0.18 : 0);
+  const recordScore = recordCoverage * 0.36;
   const leagueScore = (leagueStrength[context.league] ?? 0.55) * 0.18;
   const timingScore = hoursUntilStart <= 48 || context.status === "live" ? 0.18 : hoursUntilStart <= 168 ? 0.1 : 0.05;
   const liveScore = context.status === "live" ? 0.12 : 0.06;
@@ -640,37 +630,68 @@ function modelConfidence(context: ModelContext, closeness: number) {
   return clamp(0.28 + recordScore + leagueScore + timingScore + liveScore + separationScore + context.external.confidenceBoost, 0.34, 0.96);
 }
 
+function poissonProbability(goals: number, expectedGoals: number) {
+  let factorial = 1;
+  for (let value = 2; value <= goals; value += 1) factorial *= value;
+  return (Math.exp(-expectedGoals) * expectedGoals ** goals) / factorial;
+}
+
+function soccerDistribution(homeExpected: number, awayExpected: number) {
+  let home = 0;
+  let draw = 0;
+  let away = 0;
+  let overTwoPointFive = 0;
+  for (let homeGoals = 0; homeGoals <= 8; homeGoals += 1) {
+    for (let awayGoals = 0; awayGoals <= 8; awayGoals += 1) {
+      const probability = poissonProbability(homeGoals, homeExpected) * poissonProbability(awayGoals, awayExpected);
+      if (homeGoals > awayGoals) home += probability;
+      else if (homeGoals === awayGoals) draw += probability;
+      else away += probability;
+      if (homeGoals + awayGoals >= 3) overTwoPointFive += probability;
+    }
+  }
+  const [homeProbability, drawProbability, awayProbability] = normalizeProbabilities([home, draw, away]);
+  return { homeProbability, drawProbability, awayProbability, overTwoPointFive: clamp(overTwoPointFive, 0.05, 0.95) };
+}
+
 function modelOdds(context: ModelContext): ModelPricing {
   const profile = sportProfiles[context.sport];
   const live = liveAdjustment(context);
-  const movement = movementSignal(context);
-  const homePower = teamPower(context.home, context) + live.home + timeAdjustment(context.startsAt) + movement + context.external.homeAdjustment;
+  const homePower = teamPower(context.home, context) + live.home + timeAdjustment(context.startsAt) + context.external.homeAdjustment;
   const awayPower = teamPower(context.away, context) + live.away + context.external.awayAdjustment;
   const powerGap = (homePower - awayPower) / Math.max(0.18, profile.volatility);
   const rawHome = sigmoid(powerGap * 2.45);
   const rawAway = 1 - rawHome;
   const closeness = 1 - Math.abs(rawHome - rawAway);
-  const drawProb = context.sport === "soccer" || context.sport === "boxing" ? clamp(profile.draw * (0.72 + closeness * 0.56), 0.06, 0.34) : 0;
-  const [homeProb, drawNormalized, awayProb] = drawProb
-    ? normalizeProbabilities([clamp(rawHome * (1 - drawProb), 0.04, 0.92), drawProb, clamp(rawAway * (1 - drawProb), 0.04, 0.92)])
-    : [clamp(rawHome, 0.04, 0.92), 0, clamp(rawAway, 0.04, 0.92)];
-  const confidence = modelConfidence(context, closeness);
-  const dataQuality = clamp(confidence + (context.home.record && context.away.record ? 0.04 : -0.06) + context.external.dataQualityBoost, 0.28, 0.98);
   const liveStats = context.external.stats;
-  const calibrationDiscount = context.external.calibrationSampleSize > 50 ? (context.external.closingLineScore - 0.5) * 0.025 : 0;
-  const margin = round(clamp(0.045 + (1 - confidence) * 0.045 + (context.status === "live" ? 0.012 : 0) + context.external.marginBoost - calibrationDiscount, 0.035, 0.14), 3);
-  const toOdds = (probability: number) => round(clamp(1 / (probability * (1 + margin)), 1.08, 18));
   const statsPressure = liveStats
     ? context.sport === "soccer" && liveStats.xg
       ? (liveStats.xg.home + liveStats.xg.away - 2.4) * 0.35
       : (liveStats.shotsOnTarget.home + liveStats.shotsOnTarget.away) * 0.03
     : 0;
   const expectedTotal = profile.total + live.pace + statsPressure + (homePower + awayPower - 1) * profile.volatility * (context.sport === "soccer" ? 1.2 : 8);
+  const soccer = context.sport === "soccer"
+    ? soccerDistribution(
+      clamp(expectedTotal * (0.5 + (rawHome - 0.5) * 0.72), 0.2, 4.5),
+      clamp(expectedTotal * (0.5 + (rawAway - 0.5) * 0.72), 0.2, 4.5),
+    )
+    : null;
+  const drawProb = context.sport === "boxing" ? clamp(profile.draw * (0.72 + closeness * 0.56), 0.03, 0.16) : 0;
+  const [homeProb, drawNormalized, awayProb] = soccer
+    ? [soccer.homeProbability, soccer.drawProbability, soccer.awayProbability]
+    : drawProb
+    ? normalizeProbabilities([clamp(rawHome * (1 - drawProb), 0.04, 0.92), drawProb, clamp(rawAway * (1 - drawProb), 0.04, 0.92)])
+    : [clamp(rawHome, 0.04, 0.92), 0, clamp(rawAway, 0.04, 0.92)];
+  const confidence = modelConfidence(context, closeness);
+  const dataQuality = clamp(confidence + (context.home.record && context.away.record ? 0.04 : -0.06) + context.external.dataQualityBoost, 0.28, 0.98);
+  const calibrationDiscount = context.external.calibrationSampleSize > 50 ? (context.external.closingLineScore - 0.5) * 0.025 : 0;
+  const margin = round(clamp(0.045 + (1 - confidence) * 0.045 + (context.status === "live" ? 0.012 : 0) + context.external.marginBoost - calibrationDiscount, 0.035, 0.14), 3);
+  const toOdds = (probability: number) => round(clamp(1 / (probability * (1 + margin)), 1.08, 18));
   const totalLineBase = context.sport === "soccer" || context.sport === "mlb" || context.sport === "nhl" || context.sport === "boxing"
     ? clamp(expectedTotal, profile.total * 0.55, profile.total * 1.65)
     : clamp(expectedTotal, profile.total * 0.75, profile.total * 1.25);
   const totalLine = Math.round(totalLineBase * 2) / 2;
-  const overProb = clamp(0.5 + (expectedTotal - profile.total) / (profile.total * 7), 0.38, 0.62);
+  const overProb = soccer?.overTwoPointFive ?? clamp(0.5 + (expectedTotal - profile.total) / (profile.total * 7), 0.38, 0.62);
   const handicapLine = round((homeProb >= awayProb ? -1 : 1) * clamp(Math.abs(homeProb - awayProb) * profile.spreadStep * 2.6, profile.spreadStep, profile.spreadStep * 4), 1);
   return {
     odds: {
@@ -690,12 +711,12 @@ function modelOdds(context: ModelContext): ModelPricing {
       margin,
       signals: [
         "public-scoreboard",
-        "team-record",
+        "regularized-team-record",
         "sport-scoring-profile",
         "league-strength",
         "home-advantage",
         "time-to-start",
-        "five-minute-line-movement",
+        ...(context.sport === "soccer" ? ["poisson-score-distribution"] : []),
         ...(liveStats ? ["verified-live-stats"] : []),
         context.status === "live" ? "live-score-state" : "pre-match-state",
         ...context.external.feedSignals,
@@ -986,6 +1007,9 @@ async function normalizeFallbackEvent(event: EspnEvent, config: (typeof fallback
 }
 
 async function getRealOdds() {
+  if (Date.now() < oddsProviderBlockedUntil) {
+    throw new Error(oddsProviderBlockedReason ?? "The Odds API is temporarily unavailable");
+  }
   if (!oddsApiKey) return null;
   let activeKeys = activeSportsCache?.expiresAt && activeSportsCache.expiresAt > Date.now() ? activeSportsCache.data : null;
   if (!activeKeys) {
@@ -1050,7 +1074,7 @@ async function getFallbackOdds() {
     }),
   );
   const fallback = results.flat();
-  fallbackCache = { expiresAt: Date.now() + scoreboardCacheTtlMs, data: fallback };
+  fallbackCache = { expiresAt: nextMinuteBoundary(), data: fallback };
   return fallback;
 }
 
@@ -1130,7 +1154,7 @@ export async function GET() {
         : "Henriquinho model odds loaded. Add THE_ODDS_API_KEY for bookmaker odds.",
       providerError: oddsApiKey ? "The Odds API returned no active bookmaker odds for these events yet." : undefined,
     };
-    responseCache = { expiresAt: Date.now() + scoreboardCacheTtlMs, data: payload };
+    responseCache = { expiresAt: nextMinuteBoundary(), data: payload };
     return NextResponse.json(payload, { headers: { "Cache-Control": "private, max-age=10" } });
   } catch (error) {
     if (lastGoodRealOdds) {
@@ -1158,7 +1182,11 @@ export async function GET() {
         : oddsApiKey ? "Henriquinho model odds loaded while bookmaker odds refresh." : "Henriquinho model odds loaded. Add a real key for bookmaker odds.",
       providerError: error instanceof Error ? error.message : "Unknown odds provider error",
     };
-    responseCache = { expiresAt: Date.now() + (payload.providerError?.includes("OUT_OF_USAGE_CREDITS") ? oddsErrorCacheTtlMs : scoreboardCacheTtlMs), data: payload };
+    if (payload.providerError?.includes("OUT_OF_USAGE_CREDITS")) {
+      oddsProviderBlockedUntil = Date.now() + oddsErrorCacheTtlMs;
+      oddsProviderBlockedReason = payload.providerError;
+    }
+    responseCache = { expiresAt: realOddsOnly ? Date.now() + oddsErrorCacheTtlMs : nextMinuteBoundary(), data: payload };
     return NextResponse.json(payload, { headers: { "Cache-Control": "private, max-age=10" } });
   }
 }
