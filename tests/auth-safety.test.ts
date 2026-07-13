@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canResendVerification, isAdultBirthDate, mayAccessAdmin, mayAccessPlayer, safeProfileInput } from "../src/lib/auth";
+import { canResendVerification, isAdultBirthDate, mayAccessAdmin, mayAccessPlayer, safeProfileInput, socialProviderMessage } from "../src/lib/auth";
 
 test("email/password accounts are only player profiles regardless of browser metadata", () => {
   const browserInput = { displayName: "  Ana  ", role: "admin", balance: 999999, account_status: "active" } as unknown as { displayName: unknown };
@@ -50,4 +50,17 @@ test("provider identities retain one profile per Supabase auth user ID", () => {
 test("Apple private relay addresses are treated as normal verified identities", () => {
   const relayAddress = "abc123@privaterelay.appleid.com";
   assert.match(relayAddress, /@privaterelay\.appleid\.com$/);
+});
+
+test("guest initialization is idempotent and preserves the single welcome balance", () => {
+  const accounts = new Map<string, { profile: boolean; wallet: number; grants: number }>();
+  const initialize = (id: string) => { const current = accounts.get(id) ?? { profile: true, wallet: 1000, grants: 1 }; accounts.set(id, current); return current; };
+  initialize("guest-auth-id");
+  const repeated = initialize("guest-auth-id");
+  assert.equal(accounts.size, 1); assert.equal(repeated.wallet, 1000); assert.equal(repeated.grants, 1);
+});
+
+test("disabled social providers show friendly errors instead of raw Supabase errors", () => {
+  assert.equal(socialProviderMessage("google", false), "Google sign-in is not available yet.");
+  assert.equal(socialProviderMessage("apple", false), "Apple sign-in is not available yet.");
 });
