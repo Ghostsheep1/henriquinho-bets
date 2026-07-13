@@ -132,6 +132,8 @@ In the Supabase SQL Editor, run these migrations in order after `supabase/schema
 
 The second migration creates idempotent wallet/account/audit structures and secure model-bet placement and settlement RPCs. Direct client inserts into bets and direct changes to wallet balances are removed.
 
+For guest beta access, also run `supabase/migrations/20260713_guest_accounts.sql` and enable **Anonymous Sign-Ins** in Supabase Dashboard -> Authentication -> Providers. Guest accounts receive one virtual $1,000 welcome balance per Supabase auth user; the unique wallet and transaction reference prevent repeated grants. Enable Supabase CAPTCHA protection for anonymous sign-ins (Dashboard -> Authentication -> Bot and Abuse Protection) before inviting broad public traffic. Retain inactive guests for at least 90 days, and never delete guests with recent transactions or unsettled bets.
+
 Set `ODDS_OPERATION_MODE=model-only` while bookmaker credits are unavailable. This is the default. It serves Henriquinho model markets and prevents `/api/odds`, player refreshes, bet placement, and the protected snapshot route from initiating an Odds API request. Future reactivation is configuration-only: set `ODDS_OPERATION_MODE=pregame-snapshot`, provide `THE_ODDS_API_KEY`, and redeploy a protected Edge Function or snapshot writer.
 
 The schema creates `profiles`, `transactions`, `matches`, `bets`, and `game_rounds` with Row Level Security policies for user-owned records.
