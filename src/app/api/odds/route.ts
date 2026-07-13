@@ -1071,6 +1071,11 @@ function resetSnapshotDailyCounter(now = new Date()) {
   }
 }
 
+function nextSnapshotRefreshAt(now = Date.now()) {
+  const interval = 2 * 60 * 60 * 1000;
+  return new Date((Math.floor(now / interval) + 1) * interval).toISOString();
+}
+
 async function snapshotMatchesForPlayers(now = Date.now()) {
   const persisted = await readPersistedOddsSnapshot();
   const snapshot = persisted ? { expiresAt: persisted.expiresAt, data: persisted.matches } : pregameSnapshot;
@@ -1118,6 +1123,7 @@ export async function refreshPregameBookmakerSnapshot() {
       dailyRequestLimit: oddsDailyRequestLimit,
       monthlyCreditReserve: oddsMonthlyCreditReserve,
       operationMode: "pregame-snapshot",
+      nextScheduledSyncAt: nextSnapshotRefreshAt(),
     });
     if (!result.data) {
       const exhausted = result.exhausted || result.rateLimited || (result.quota.remainingCredits !== undefined && result.quota.remainingCredits <= oddsMonthlyCreditReserve);
@@ -1142,7 +1148,7 @@ export async function refreshPregameBookmakerSnapshot() {
     await writePersistedOddsSnapshot({ matches, expiresAt: pregameSnapshot.expiresAt, fetchedAt: new Date().toISOString() });
     recordOddsHealth(matches, Date.now(), oddsPregameStaleMs, oddsLiveStaleMs);
     updateOddsHealth({ provider: oddsProvider, configured: true, status: "healthy", lastSuccessfulRequestAt: new Date().toISOString(), lastError: undefined });
-    return { refreshed: true, markets: matches.length, nextRefreshAt: new Date(Math.ceil(Date.now() / (2 * 60 * 60 * 1000)) * 2 * 60 * 60 * 1000).toISOString() };
+    return { refreshed: true, markets: matches.length, nextRefreshAt: nextSnapshotRefreshAt() };
   } finally {
     pregameSnapshotRefreshInFlight = false;
   }
