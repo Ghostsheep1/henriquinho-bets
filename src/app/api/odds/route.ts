@@ -1178,7 +1178,7 @@ export async function GET() {
 
   // A fixture provider can supply real fixtures to the model, but it is never allowed
   // to pre-empt a configured bookmaker-odds provider.
-  if (apiFootballRealSnapshot && !oddsApiKey) {
+  if (apiFootballRealSnapshot && fallbackMode === "model" && !oddsApiKey) {
     try {
       const matches = await getApiFootballSnapshotOdds();
       const payload: OddsPayload = {
