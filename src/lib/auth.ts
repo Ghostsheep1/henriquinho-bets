@@ -28,3 +28,7 @@ export function isAdultBirthDate(value: string, today = new Date()) {
 export function canResendVerification(lastRequestedAt: number, now = Date.now(), cooldownMs = 60_000) {
   return now - lastRequestedAt >= cooldownMs;
 }
+
+export function socialProviderMessage(provider: "google" | "apple", enabled: boolean) {
+  return enabled ? "" : `${provider === "google" ? "Google" : "Apple"} sign-in is not available yet.`;
+}
