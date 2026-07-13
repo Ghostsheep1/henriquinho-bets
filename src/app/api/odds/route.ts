@@ -11,7 +11,10 @@ const apiFootballKeyRaw = (process.env.API_FOOTBALL_KEY ?? "").trim();
 const apiFootballKey = apiFootballKeyRaw && !apiFootballKeyRaw.includes("your-") ? apiFootballKeyRaw : undefined;
 const apiFootballRealSnapshot = process.env.API_FOOTBALL_REAL_SNAPSHOT === "true";
 const internalSportsOnly = process.env.HENRIQUINHO_INTERNAL_SPORTS_ONLY === "true";
-const realOddsOnly = process.env.REAL_ODDS_ONLY !== "false";
+// HenriquinhoBets uses virtual coins. Keep calculated markets available by
+// default when a bookmaker feed is unavailable; production can still opt into
+// real-bookmaker-only mode with REAL_ODDS_ONLY=true.
+const realOddsOnly = process.env.REAL_ODDS_ONLY === "true";
 const oddsCacheTtlMs = 5 * 60 * 1000;
 const oddsErrorCacheTtlMs = 60 * 60 * 1000;
 const scoreboardCacheTtlMs = 60 * 1000;

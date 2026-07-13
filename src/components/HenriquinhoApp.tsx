@@ -18,6 +18,7 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
+import Image from "next/image";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
 import { featuredLeagues, starterTransactions } from "@/lib/seed";
@@ -336,6 +337,19 @@ const copy: Record<Language, Record<string, string>> = {
 
 function t(language: Language, key: string) {
   return copy[language][key] ?? copy.en[key] ?? key;
+}
+
+function BrandLogo({ className, priority = false }: { className: string; priority?: boolean }) {
+  return (
+    <Image
+      src="/brand/henriquinhobets-logo.png"
+      alt="HenriquinhoBets"
+      width={512}
+      height={512}
+      priority={priority}
+      className={clsx("object-cover object-center", className)}
+    />
+  );
 }
 
 function isLanguage(value: unknown): value is Language {
@@ -994,6 +1008,7 @@ function LoginGate({ language, setLanguage, onEnter }: { language: Language; set
       <div className="fixed inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,.26),_transparent_34%),linear-gradient(135deg,_#050806_0%,_#0d1712_50%,_#171102_100%)]" />
       <section className="mx-auto grid min-h-screen max-w-6xl items-center gap-8 px-4 py-8 sm:px-5 lg:grid-cols-[minmax(0,1fr)_420px]">
         <div>
+          <BrandLogo className="mb-5 h-20 w-20 rounded-2xl border border-amber-300/30 shadow-[0_0_35px_rgba(250,204,21,0.22)]" priority />
           <div className="mb-5 inline-flex items-center gap-2 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs font-black uppercase text-amber-200">
             <Crown className="h-4 w-4" /> Beta access
           </div>
@@ -1100,9 +1115,7 @@ function Header({ user, balance, soundOn, setSoundOn, onMenu, onDeposit, onSignO
           <button className="rounded-md border border-white/10 p-2 lg:hidden" onClick={onMenu} aria-label="Open menu">
             <Menu className="h-5 w-5" />
           </button>
-          <div className="flex h-10 w-10 items-center justify-center rounded-md bg-emerald-500 text-black shadow-[0_0_30px_rgba(16,185,129,0.35)]">
-            <Crown className="h-6 w-6" />
-          </div>
+          <BrandLogo className="h-10 w-10 rounded-md border border-amber-300/30 shadow-[0_0_30px_rgba(16,185,129,0.35)]" priority />
           <div>
             <div className="text-lg font-black tracking-wide text-white">Henriquinho<span className="text-amber-300">Bets</span></div>
             <div className="hidden text-xs text-slate-400 sm:block">Sports betting & casino</div>
@@ -2779,7 +2792,7 @@ function Footer() {
   return (
     <footer className="border-t border-white/10 bg-[#050807] px-4 py-8">
       <div className="mx-auto flex max-w-[1540px] flex-col gap-4 text-sm text-slate-400 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex items-center gap-2 font-black text-white"><Crown className="h-5 w-5 text-amber-300" /> HenriquinhoBets <span className="rounded border border-emerald-300/30 px-2 py-1 text-xs text-emerald-200">Licensed & Regulated</span></div>
+        <div className="flex items-center gap-2 font-black text-white"><BrandLogo className="h-7 w-7 rounded-md border border-amber-300/30" /> HenriquinhoBets <span className="rounded border border-emerald-300/30 px-2 py-1 text-xs text-emerald-200">Licensed & Regulated</span></div>
         <div className="flex flex-wrap gap-4">
           {["Responsible Gaming", "Privacy Policy", "Terms & Conditions", "Contact Us", "Affiliates"].map((item) => <a key={item} href="#" className="hover:text-white">{item}</a>)}
         </div>
