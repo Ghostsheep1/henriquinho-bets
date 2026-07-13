@@ -1,8 +1,0 @@
-{
-  "crons": [
-    {
-      "path": "/api/cron/odds-snapshot",
-      "schedule": "0 */2 * * *"
-    }
-  ]
-}

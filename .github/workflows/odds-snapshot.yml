@@ -1,0 +1,21 @@
+name: Refresh pregame bookmaker snapshot
+
+on:
+  schedule:
+    - cron: "0 */2 * * *"
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Request protected production snapshot refresh
+        env:
+          SNAPSHOT_URL: ${{ secrets.HENRIQUINHO_SNAPSHOT_CRON_URL }}
+          CRON_SECRET: ${{ secrets.HENRIQUINHO_CRON_SECRET }}
+        run: |
+          test -n "$SNAPSHOT_URL"
+          test -n "$CRON_SECRET"
+          curl --fail --silent --show-error \
+            --header "Authorization: Bearer $CRON_SECRET" \
+            "$SNAPSHOT_URL"
