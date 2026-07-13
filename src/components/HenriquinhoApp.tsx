@@ -692,7 +692,7 @@ export default function HenriquinhoApp({
   authenticatedUser,
   onAuthenticatedSignOut,
 }: {
-  authenticatedUser?: { name: string; email: string; admin: boolean; balance?: number };
+  authenticatedUser?: { name: string; email: string; admin: boolean; guest?: boolean; balance?: number };
   onAuthenticatedSignOut?: () => Promise<void> | void;
 }) {
   const latestIndexReady = useLatestIndexGate();
@@ -713,12 +713,13 @@ export default function HenriquinhoApp({
   const [lastBonus, setLastBonus] = useState<string | null>(null);
   const [depositOpen, setDepositOpen] = useState(false);
   const [soundOn, setSoundOn] = useState(true);
+  const [guestBannerVisible, setGuestBannerVisible] = useState(true);
   const { matches, worldCup, loading, message } = useLiveSports();
   const matchById = useMemo(() => new Map(matches.map((match) => [match.id, match])), [matches]);
 
   useEffect(() => {
     if (authenticatedUser) {
-      setUser({ name: authenticatedUser.name, email: authenticatedUser.email, admin: authenticatedUser.admin });
+      setUser({ name: authenticatedUser.name, email: authenticatedUser.email, admin: authenticatedUser.admin, guest: authenticatedUser.guest });
       setHasEntered(true);
       setAccessLocked(false);
       if (Number.isFinite(authenticatedUser.balance)) setBalance(authenticatedUser.balance!);
@@ -857,6 +858,7 @@ export default function HenriquinhoApp({
   }, [matchById]);
 
   const claimBonus = () => {
+    if (user?.guest) return;
     const today = new Date().toDateString();
     if (lastBonus === today) return;
     setLastBonus(today);
@@ -868,6 +870,7 @@ export default function HenriquinhoApp({
   };
 
   const signOut = async () => {
+    if (authenticatedUser?.guest && !window.confirm("This guest account may not be recoverable after signing out. Do you want to continue?")) return;
     if (onAuthenticatedSignOut) await onAuthenticatedSignOut();
     setUser(null);
     setHasEntered(false);
@@ -959,6 +962,7 @@ export default function HenriquinhoApp({
       <div className="fixed inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,_rgba(12,159,89,0.22),_transparent_34%),linear-gradient(135deg,_#070a0c_0%,_#0d1712_45%,_#141006_100%)]" />
       <LiveTicker matches={matches} message={message} />
       <Header user={user} balance={balance} soundOn={soundOn} setSoundOn={setSoundOn} onMenu={() => setMenuOpen(true)} onDeposit={() => setDepositOpen(true)} onSignOut={() => { void signOut(); }} language={language} setLanguage={setLanguage} />
+      {user?.guest && guestBannerVisible && <div className="mx-auto mt-3 flex max-w-[1540px] items-center justify-between gap-3 rounded-md border border-amber-300/30 bg-amber-300/10 px-4 py-3 text-sm text-amber-100"><span>You’re using a guest account. Save your account to keep access across devices.</span><div className="flex gap-2"><a href="/account" className="rounded bg-amber-300 px-3 py-1 font-bold text-black">Save account</a><button onClick={() => setGuestBannerVisible(false)} aria-label="Dismiss guest notice" className="rounded border border-amber-200/40 px-2">Close</button></div></div>}
       <div className="mx-auto flex max-w-[1540px] gap-4 px-3 pb-8 pt-3 sm:px-5">
         <Sidebar active={active} setActive={setActive} open={menuOpen} setOpen={setMenuOpen} language={language} isAdmin={isAdmin} />
         <main className="min-w-0 flex-1 space-y-4">
