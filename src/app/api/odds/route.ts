@@ -5,17 +5,18 @@ import { dedupeProviderEvents, isDecimalPrice, isMarketBettable, isPregameSnapsh
 import { requestProviderJson } from "@/lib/odds/providerClient";
 import { recordOddsHealth, updateOddsHealth } from "@/lib/odds/healthStore";
 import { readPersistedOddsSnapshot, writePersistedOddsSnapshot } from "@/lib/odds/snapshotPersistence";
+import { getOddsOperationMode } from "@/lib/odds/config";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const oddsApiKeyRaw = (process.env.THE_ODDS_API_KEY ?? process.env.ODDS_API_KEY ?? "").trim();
+const oddsApiKeyRaw = (process.env.THE_ODDS_API_KEY ?? "").trim();
 const oddsApiKey = oddsApiKeyRaw && !oddsApiKeyRaw.includes("your-") ? oddsApiKeyRaw : undefined;
 const apiFootballKeyRaw = (process.env.API_FOOTBALL_KEY ?? "").trim();
 const apiFootballKey = apiFootballKeyRaw && !apiFootballKeyRaw.includes("your-") ? apiFootballKeyRaw : undefined;
 const apiFootballRealSnapshot = process.env.API_FOOTBALL_REAL_SNAPSHOT === "true";
 const internalSportsOnly = process.env.HENRIQUINHO_INTERNAL_SPORTS_ONLY === "true";
-const oddsOperationMode = process.env.ODDS_OPERATION_MODE === "pregame-snapshot" ? "pregame-snapshot" : "continuous";
+const oddsOperationMode = getOddsOperationMode();
 const fallbackMode = process.env.ODDS_FALLBACK_MODE === "disable" || process.env.REAL_ODDS_ONLY === "true" ? "disable" : "model";
 const realOddsOnly = fallbackMode === "disable";
 const oddsProvider = process.env.ODDS_PROVIDER ?? "the-odds-api";
@@ -1087,6 +1088,7 @@ async function snapshotMatchesForPlayers(now = Date.now()) {
 }
 
 export async function refreshPregameBookmakerSnapshot() {
+  if (oddsOperationMode === "model-only") return { refreshed: false, reason: "Model-only mode disables bookmaker requests" };
   if (oddsOperationMode !== "pregame-snapshot") return { refreshed: false, reason: "Pregame snapshot mode is disabled" };
   if (oddsProvider !== "the-odds-api" || !oddsApiKey) {
     updateOddsHealth({ provider: oddsProvider, configured: false, status: "unconfigured", lastError: "THE_ODDS_API_KEY is not configured" });
@@ -1288,6 +1290,21 @@ function suspendBookmakerMarkets(matches: Match[], reason: string) {
 }
 
 export async function GET() {
+  if (oddsOperationMode === "model-only") {
+    const matches = await getFallbackOdds().catch(() => []);
+    const payload: OddsPayload = {
+      source: "henriquinho-model",
+      oddsSource: "model-provider",
+      configured: true,
+      realOddsOnly: false,
+      matches,
+      message: "Henriquinho model markets loaded.",
+      fallbackMode: "model",
+    };
+    cachePayload(payload, nextMinuteBoundary());
+    updateOddsHealth({ provider: "paused", configured: true, status: "healthy", lastError: undefined, operationMode: "model-only", dailyRequestsUsed: 0, dailyRequestLimit: 0 });
+    return NextResponse.json(payload, { headers: { "Cache-Control": "private, max-age=30" } });
+  }
   if (internalSportsOnly) {
     const internal = getHenriquinhoInternalSports();
     const payload: OddsPayload = {
