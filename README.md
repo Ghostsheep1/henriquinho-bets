@@ -82,12 +82,48 @@ Free-tier sources:
 ## Supabase database
 
 1. Create a free Supabase project.
-2. In Auth settings, disable email confirmation for local testing.
+2. In Auth settings, enable Confirm email for production. You may disable it only in a local-only test project.
 3. Add `http://localhost:3000` to allowed redirect URLs.
 4. Open the SQL editor.
 5. Run `supabase/schema.sql`.
 6. Run `supabase/seed.sql` only if you want initial database rows for manual API sync testing.
 7. Copy your project URL and anon key into `.env.local`.
+
+## Authentication setup
+
+Run `supabase/migrations/20260713_auth_profiles.sql` in the Supabase SQL Editor after the base schema. It is idempotent and adds protected profile role/status fields, an idempotent signup wallet reference, and safe RPCs for profile completion and display-name changes. Do not grant browser clients direct profile update permissions.
+
+Set these application values in local `.env.local` and in Vercel Production:
+
+```bash
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-public-anon-key
+SUPABASE_SERVICE_ROLE_KEY=server-only-service-role-key
+```
+
+Never prefix the service-role key with `NEXT_PUBLIC_`. It is used only by server routes to verify a bearer token and enforce admin authorization.
+
+### Redirect URLs
+
+In Supabase Auth URL Configuration, set the Site URL to the production site and add both local and production callback targets:
+
+```text
+http://localhost:3000
+http://localhost:3000/login
+http://localhost:3000/reset-password
+https://your-production-domain/login
+https://your-production-domain/reset-password
+```
+
+### Google OAuth
+
+Create a Google OAuth client, then add the Supabase callback URL shown in Supabase Dashboard -> Authentication -> Providers -> Google to Google Cloud's authorized redirect URIs. Enable Google in Supabase and enter its client ID and client secret there. Test a first login and a returning login on production before treating it as live.
+
+### Apple Sign In
+
+Create an Apple Services ID and Sign In with Apple key, configure the Supabase callback URL in Apple Developer, then enable Apple in Supabase with the Services ID, team ID, key ID, and private key. Apple may provide a private relay email and only supplies a name on the first authorization; the profile trigger/RPC preserves the original profile on later logins. Test a first production login before treating Apple login as live.
+
+Supabase does not safely merge two separate authentication users simply because an email string appears similar. When a user signs in with the same verified email through a provider, Supabase identity linking behavior must be tested in your project. Do not merge unverified accounts in application code; offer a signed-in account-linking flow only after verifying both identities through Supabase.
 
 The schema creates `profiles`, `transactions`, `matches`, `bets`, and `game_rounds` with Row Level Security policies for user-owned records.
 
