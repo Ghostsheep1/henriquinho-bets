@@ -37,7 +37,7 @@ ODDS_PROVIDER=the-odds-api
 ODDS_PROVIDER_REGIONS=us
 ODDS_PROVIDER_MARKETS=h2h,spreads,totals
 ODDS_REFRESH_SPORT_LIMIT=1
-ODDS_PREGAME_REFRESH_MS=300000
+ODDS_PREGAME_REFRESH_MS=900000
 ODDS_LIVE_REFRESH_MS=60000
 ODDS_PREGAME_STALE_MS=900000
 ODDS_LIVE_STALE_MS=90000
@@ -119,7 +119,7 @@ The open model is unlimited for the beta because it uses public scoreboards and 
 The production provider adapter is The Odds API v4. Set an active `THE_ODDS_API_KEY` in Vercel and use `ODDS_FALLBACK_MODE=disable` for a bookmaker-only release. `model` is appropriate only when clearly offering virtual Henriquinho model markets.
 
 - The provider's free plan currently has 500 credits per month. The odds endpoint is charged by `regions x unique markets`; the default `us` region and `h2h,spreads,totals` means **3 credits per sport refresh**. Verify current terms before launch at [The Odds API pricing](https://the-odds-api.com/) and [v4 guide](https://the-odds-api.com/liveapi/guides/v4/).
-- Default quota-safe configuration polls one sport every 5 minutes pregame and every minute when a returned market is live. At the pregame cadence, one sport uses about 8,640 credits per 30-day month if traffic keeps the route warm; this exceeds the free allowance. Raise `ODDS_REFRESH_SPORT_LIMIT` only after choosing a plan that covers the resulting volume. The provider exposes quota headers, and the app stops requesting for one hour once the configured safety threshold is reached.
+- Default configuration polls one sport every 15 minutes pregame and every minute when a returned market is live. At the pregame cadence, one sport uses about 288 credits/day and 8,640 credits per 30-day month if traffic keeps the route warm; an active four-hour live window adds up to 720 credits per event day. This exceeds the free allowance by a wide margin. Raise `ODDS_REFRESH_SPORT_LIMIT` only after choosing a plan that covers the resulting volume. The provider exposes quota headers, and the app stops requesting for one hour once the configured safety threshold is reached.
 - The app caches one response per runtime, retries only 429/5xx responses with capped exponential backoff, honors `Retry-After` when sent, and never continuously retries a quota-exhausted response. Visible client refreshes are aligned to `:00` each minute.
 - Pregame markets suspend after 15 minutes without a provider timestamp; live markets suspend after 90 seconds. Finished, postponed, missing, malformed, and provider-failed markets cannot be bet. A selection is rechecked against its exact current price immediately before placement; the saved bet retains the source and recorded price for settlement.
 

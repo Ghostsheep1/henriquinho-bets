@@ -19,7 +19,7 @@ const realOddsOnly = fallbackMode === "disable";
 const oddsProvider = process.env.ODDS_PROVIDER ?? "the-odds-api";
 const oddsRegions = process.env.ODDS_PROVIDER_REGIONS ?? "us";
 const oddsMarkets = process.env.ODDS_PROVIDER_MARKETS ?? "h2h,spreads,totals";
-const oddsPregameRefreshMs = Math.max(60_000, Number(process.env.ODDS_PREGAME_REFRESH_MS ?? 5 * 60_000));
+const oddsPregameRefreshMs = Math.max(60_000, Number(process.env.ODDS_PREGAME_REFRESH_MS ?? 15 * 60_000));
 const oddsLiveRefreshMs = Math.max(15_000, Number(process.env.ODDS_LIVE_REFRESH_MS ?? 60_000));
 const oddsPregameStaleMs = Math.max(60_000, Number(process.env.ODDS_PREGAME_STALE_MS ?? 15 * 60_000));
 const oddsLiveStaleMs = Math.max(15_000, Number(process.env.ODDS_LIVE_STALE_MS ?? 90_000));
