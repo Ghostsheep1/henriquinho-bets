@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import type { Match, SportKey } from "@/lib/types";
 import { getHenriquinhoInternalSports } from "@/lib/henriquinhoSports";
+import { dedupeProviderEvents, isDecimalPrice, providerEventKey } from "@/lib/odds/marketSafety";
+import { requestProviderJson } from "@/lib/odds/providerClient";
+import { recordOddsHealth, updateOddsHealth } from "@/lib/odds/healthStore";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -11,21 +14,29 @@ const apiFootballKeyRaw = (process.env.API_FOOTBALL_KEY ?? "").trim();
 const apiFootballKey = apiFootballKeyRaw && !apiFootballKeyRaw.includes("your-") ? apiFootballKeyRaw : undefined;
 const apiFootballRealSnapshot = process.env.API_FOOTBALL_REAL_SNAPSHOT === "true";
 const internalSportsOnly = process.env.HENRIQUINHO_INTERNAL_SPORTS_ONLY === "true";
-// HenriquinhoBets uses virtual coins. Keep calculated markets available by
-// default when a bookmaker feed is unavailable; production can still opt into
-// real-bookmaker-only mode with REAL_ODDS_ONLY=true.
-const realOddsOnly = process.env.REAL_ODDS_ONLY === "true";
-const oddsCacheTtlMs = 5 * 60 * 1000;
+const fallbackMode = process.env.ODDS_FALLBACK_MODE === "disable" || process.env.REAL_ODDS_ONLY === "true" ? "disable" : "model";
+const realOddsOnly = fallbackMode === "disable";
+const oddsProvider = process.env.ODDS_PROVIDER ?? "the-odds-api";
+const oddsRegions = process.env.ODDS_PROVIDER_REGIONS ?? "us";
+const oddsMarkets = process.env.ODDS_PROVIDER_MARKETS ?? "h2h,spreads,totals";
+const oddsPregameRefreshMs = Math.max(60_000, Number(process.env.ODDS_PREGAME_REFRESH_MS ?? 5 * 60_000));
+const oddsLiveRefreshMs = Math.max(15_000, Number(process.env.ODDS_LIVE_REFRESH_MS ?? 60_000));
+const oddsPregameStaleMs = Math.max(60_000, Number(process.env.ODDS_PREGAME_STALE_MS ?? 15 * 60_000));
+const oddsLiveStaleMs = Math.max(15_000, Number(process.env.ODDS_LIVE_STALE_MS ?? 90_000));
+const oddsProviderTimeoutMs = Math.max(1_000, Number(process.env.ODDS_PROVIDER_TIMEOUT_MS ?? 8_000));
+const oddsProviderMaxRetries = Math.max(0, Math.min(3, Number(process.env.ODDS_PROVIDER_MAX_RETRIES ?? 2)));
+const oddsProviderMinCredits = Math.max(0, Number(process.env.ODDS_PROVIDER_MIN_REMAINING_CREDITS ?? 20));
 const oddsErrorCacheTtlMs = 60 * 60 * 1000;
 const scoreboardCacheTtlMs = 60 * 1000;
 const apiFootballSnapshotCacheTtlMs = Math.max(60 * 1000, Number(process.env.API_FOOTBALL_REFRESH_MS ?? 864000));
-const maxOddsSportsPerRefresh = Math.max(1, Number(process.env.ODDS_REFRESH_SPORT_LIMIT ?? 8));
+const maxOddsSportsPerRefresh = Math.max(1, Number(process.env.ODDS_REFRESH_SPORT_LIMIT ?? 1));
 const modelVersion = "HENQ-OPEN-ODDS-3.1";
 const defaultMaxMarketStake = Number(process.env.DEFAULT_MARKET_MAX_STAKE ?? 250);
 
 type OddsPayload = {
+  integrationVersion?: "bookmaker-hardening-2026-07-13";
   source: "odds-api" | "espn-public" | "api-football" | "henriquinho-model" | "henriquinho-internal";
-  oddsSource: "real-provider" | "model-provider" | "calculated-demo";
+  oddsSource: "real-provider" | "model-provider" | "calculated-demo" | "unavailable";
   configured: boolean;
   realOddsOnly: boolean;
   matches: Match[];
@@ -33,11 +44,14 @@ type OddsPayload = {
   cached?: boolean;
   stale?: boolean;
   providerError?: string;
+  fallbackMode?: "disable" | "model";
+  fetchedAt?: string;
 };
 
 type CacheEntry<T> = { expiresAt: number; data: T };
 
 let responseCache: CacheEntry<OddsPayload> | null = null;
+let responseCachedAt = 0;
 let lastGoodRealOdds: OddsPayload | null = null;
 let activeSportsCache: CacheEntry<Set<string>> | null = null;
 let fallbackCache: CacheEntry<Match[]> | null = null;
@@ -129,8 +143,6 @@ type OddsApiEvent = {
   away_team: string;
   bookmakers?: OddsApiBookmaker[];
 };
-
-type OddsApiErrorBody = { message?: string; error_code?: string };
 
 type EspnCompetition = {
   competitors: Array<{
@@ -257,7 +269,7 @@ type ApiFootballTeamStatistics = {
 };
 
 function decimal(price?: number) {
-  return typeof price === "number" && Number.isFinite(price) ? Number(price.toFixed(2)) : undefined;
+  return isDecimalPrice(price) ? Number(price.toFixed(2)) : undefined;
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -279,6 +291,10 @@ function normalizeName(name: string) {
 
 function nextMinuteBoundary() {
   return (Math.floor(Date.now() / 60_000) + 1) * 60_000;
+}
+
+function nextRefreshBoundary(intervalMs: number) {
+  return (Math.floor(Date.now() / intervalMs) + 1) * intervalMs;
 }
 
 function emptyFeedStatus(): FeedStatus {
@@ -446,18 +462,6 @@ function normalizeHeatmap(values?: number[]) {
   return cells.map((value) => Math.round((value / max) * 100));
 }
 
-async function providerError(response: Response, label: string) {
-  const text = await response.text().catch(() => "");
-  try {
-    const parsed = JSON.parse(text) as OddsApiErrorBody;
-    const code = parsed.error_code ? ` ${parsed.error_code}` : "";
-    const message = parsed.message ? ` - ${parsed.message}` : "";
-    return `${label} failed: ${response.status}${code}${message}`;
-  } catch {
-    return `${label} failed: ${response.status}${text ? ` - ${text.slice(0, 120)}` : ""}`;
-  }
-}
-
 function chooseBookmaker(bookmakers: OddsApiBookmaker[] = []) {
   const preferred = ["draftkings", "fanduel", "betmgm", "pinnacle", "bet365"];
   return [...bookmakers].sort((a, b) => {
@@ -499,9 +503,13 @@ function normalizeOddsEvent(event: OddsApiEvent, config: (typeof realOddsSports)
 
   const status = oddsStatus(event.commence_time);
   if (status === "finished") return null;
+  const fetchedAt = new Date().toISOString();
+  const providerUpdatedAt = new Date(bookmaker.last_update);
+  if (!Number.isFinite(providerUpdatedAt.getTime())) return null;
+  const providerLastUpdated = providerUpdatedAt.toISOString();
 
   return {
-    id: `odds-api-${config.key}-${event.id}`,
+    id: `bookmaker-${providerEventKey(oddsProvider, event.id)}`,
     sport: config.sport,
     league: config.league,
     country: config.country,
@@ -509,6 +517,12 @@ function normalizeOddsEvent(event: OddsApiEvent, config: (typeof realOddsSports)
     away: event.away_team,
     startsAt: event.commence_time,
     status,
+    marketSource: "bookmaker",
+    marketStatus: status === "live" || status === "upcoming" ? "open" : "closed",
+    provider: oddsProvider,
+    providerEventId: event.id,
+    providerLastUpdated,
+    fetchedAt,
     odds: {
       moneyline: {
         home: homePrice,
@@ -524,7 +538,7 @@ function normalizeOddsEvent(event: OddsApiEvent, config: (typeof realOddsSports)
     },
     oddsSource: "real-provider",
     oddsProvider: bookmaker.title,
-    oddsUpdatedAt: bookmaker.last_update,
+    oddsUpdatedAt: providerLastUpdated,
     source: "odds-api",
   };
 }
@@ -542,6 +556,13 @@ function stripEstimatedMarkets(match: Match): Match {
     minute: match.minute,
     score: match.score,
     liveStats: match.liveStats,
+    marketSource: match.marketSource,
+    marketStatus: "suspended",
+    suspensionReason: "Bookmaker odds unavailable and model fallback is disabled",
+    provider: match.provider,
+    providerEventId: match.providerEventId,
+    providerLastUpdated: match.providerLastUpdated,
+    fetchedAt: match.fetchedAt,
     source: "espn-public",
   };
 }
@@ -922,6 +943,12 @@ function normalizeApiFootballFixture(fixture: ApiFootballFixture): Match | null 
     away,
     startsAt,
     status,
+    marketSource: "henriquinho-model",
+    marketStatus: status === "live" || status === "upcoming" ? "open" : "closed",
+    provider: "henriquinho-model",
+    providerEventId: String(fixtureId),
+    providerLastUpdated: new Date().toISOString(),
+    fetchedAt: new Date().toISOString(),
     minute: fixture.fixture?.status?.elapsed ? `${fixture.fixture.status.elapsed}'` : undefined,
     score: hasScore && status === "live" ? `${fixture.goals?.home} - ${fixture.goals?.away}` : undefined,
     odds: pricing.odds,
@@ -992,6 +1019,12 @@ async function normalizeFallbackEvent(event: EspnEvent, config: (typeof fallback
     away: away.team.displayName,
     startsAt: event.date,
     status,
+    marketSource: "henriquinho-model",
+    marketStatus: status === "live" || status === "upcoming" ? "open" : "closed",
+    provider: "henriquinho-model",
+    providerEventId: event.id,
+    providerLastUpdated: new Date().toISOString(),
+    fetchedAt: new Date().toISOString(),
     minute: competition?.status?.type?.shortDetail ?? competition?.status?.displayClock,
     score: hasScore ? `${home.score} - ${away.score}` : undefined,
     odds: pricing.odds,
@@ -1007,49 +1040,85 @@ async function normalizeFallbackEvent(event: EspnEvent, config: (typeof fallback
 }
 
 async function getRealOdds() {
+  if (oddsProvider !== "the-odds-api" || !oddsApiKey) {
+    updateOddsHealth({ provider: oddsProvider, configured: false, status: "unconfigured", lastError: "THE_ODDS_API_KEY is not configured" });
+    return null;
+  }
   if (Date.now() < oddsProviderBlockedUntil) {
+    updateOddsHealth({ provider: oddsProvider, configured: true, status: "degraded", blockedUntil: new Date(oddsProviderBlockedUntil).toISOString(), lastError: oddsProviderBlockedReason ?? undefined });
     throw new Error(oddsProviderBlockedReason ?? "The Odds API is temporarily unavailable");
   }
-  if (!oddsApiKey) return null;
+
+  const providerOptions = { timeoutMs: oddsProviderTimeoutMs, maxRetries: oddsProviderMaxRetries };
+  const updateQuota = (quota: { remainingCredits?: number; usedCredits?: number; lastRequestCost?: number }) => {
+    updateOddsHealth({ provider: oddsProvider, configured: true, remainingCredits: quota.remainingCredits, usedCredits: quota.usedCredits, lastRequestCost: quota.lastRequestCost });
+    if (quota.remainingCredits !== undefined && quota.remainingCredits <= oddsProviderMinCredits) {
+      oddsProviderBlockedUntil = Date.now() + oddsErrorCacheTtlMs;
+      oddsProviderBlockedReason = `Provider credit safety threshold reached (${quota.remainingCredits} remaining)`;
+    }
+  };
+
   let activeKeys = activeSportsCache?.expiresAt && activeSportsCache.expiresAt > Date.now() ? activeSportsCache.data : null;
   if (!activeKeys) {
-    const activeSportsResponse = await fetch(`https://api.the-odds-api.com/v4/sports/?apiKey=${oddsApiKey}`, { cache: "no-store" });
-    if (!activeSportsResponse.ok) {
-      throw new Error(`The Odds API sports request failed: ${activeSportsResponse.status}`);
+    const result = await requestProviderJson<Array<{ key: string; active: boolean }>>(`https://api.the-odds-api.com/v4/sports/?apiKey=${encodeURIComponent(oddsApiKey)}`, providerOptions);
+    updateQuota(result.quota);
+    if (!result.data) {
+      const status = result.exhausted ? "quota_exhausted" : result.rateLimited ? "rate_limited" : "error";
+      if (result.exhausted || result.rateLimited) {
+        oddsProviderBlockedUntil = Date.now() + oddsErrorCacheTtlMs;
+        oddsProviderBlockedReason = result.error ?? "Bookmaker provider unavailable";
+      }
+      updateOddsHealth({ provider: oddsProvider, configured: true, status, lastError: result.error });
+      throw new Error(result.error ?? "The Odds API sports request failed");
     }
-    const activeSports = (await activeSportsResponse.json()) as Array<{ key: string; active: boolean }>;
-    activeKeys = new Set(activeSports.filter((sport) => sport.active).map((sport) => sport.key));
-    activeSportsCache = { expiresAt: Date.now() + 10 * 60 * 1000, data: activeKeys };
+    activeKeys = new Set(result.data.filter((sport) => sport.active).map((sport) => sport.key));
+    activeSportsCache = { expiresAt: Date.now() + 60 * 60 * 1000, data: activeKeys };
   }
+
   const configs = realOddsSports
-    .filter((config) => activeKeys.has(config.key))
+    .filter((config) => activeKeys?.has(config.key))
     .sort((a, b) => {
       const aRank = oddsRefreshPriority.indexOf(a.key as (typeof oddsRefreshPriority)[number]);
       const bRank = oddsRefreshPriority.indexOf(b.key as (typeof oddsRefreshPriority)[number]);
       return (aRank === -1 ? 99 : aRank) - (bRank === -1 ? 99 : bRank);
     })
     .slice(0, maxOddsSportsPerRefresh);
-  const results = await Promise.all(
-    configs.map(async (config) => {
-      try {
-        const url = new URL(`https://api.the-odds-api.com/v4/sports/${config.key}/odds`);
-        url.searchParams.set("apiKey", oddsApiKey);
-        url.searchParams.set("regions", "us,uk,eu");
-        url.searchParams.set("markets", "h2h,spreads,totals");
-        url.searchParams.set("oddsFormat", "decimal");
-        url.searchParams.set("dateFormat", "iso");
-        const response = await fetch(url, { cache: "no-store" });
-        if (!response.ok) return { matches: [] as Match[], error: await providerError(response, `${config.key} odds request`) };
-        const payload = (await response.json()) as OddsApiEvent[];
-        return { matches: payload.map((event) => normalizeOddsEvent(event, config)).filter(Boolean) as Match[] };
-      } catch (error) {
-        return { matches: [] as Match[], error: error instanceof Error ? `${config.key}: ${error.message}` : `${config.key}: unknown provider error` };
+
+  const results: Array<{ matches: Match[]; error?: string }> = [];
+  for (const config of configs) {
+    if (Date.now() < oddsProviderBlockedUntil) break;
+    const url = new URL(`https://api.the-odds-api.com/v4/sports/${config.key}/odds`);
+    url.searchParams.set("apiKey", oddsApiKey);
+    url.searchParams.set("regions", oddsRegions);
+    url.searchParams.set("markets", oddsMarkets);
+    url.searchParams.set("oddsFormat", "decimal");
+    url.searchParams.set("dateFormat", "iso");
+    const result = await requestProviderJson<OddsApiEvent[]>(url.toString(), providerOptions);
+    updateQuota(result.quota);
+    if (!result.data) {
+      if (result.exhausted || result.rateLimited) {
+        oddsProviderBlockedUntil = Date.now() + oddsErrorCacheTtlMs;
+        oddsProviderBlockedReason = result.error ?? "Bookmaker provider unavailable";
       }
-    }),
-  );
-  const matches = results.flatMap((result) => result.matches).sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
+      results.push({ matches: [], error: `${config.key}: ${result.error ?? "provider error"}` });
+      continue;
+    }
+    results.push({ matches: result.data.map((event) => normalizeOddsEvent(event, config)).filter((match): match is Match => Boolean(match)) });
+  }
+  const matches = dedupeProviderEvents(results.flatMap((result) => result.matches)).sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
   const errors = results.map((result) => result.error).filter(Boolean) as string[];
-  if (!matches.length && errors.length) throw new Error(errors.slice(0, 3).join("; "));
+  if (!matches.length && errors.length) {
+    updateOddsHealth({ provider: oddsProvider, configured: true, status: oddsProviderBlockedUntil > Date.now() ? "degraded" : "error", lastError: errors.slice(0, 3).join("; ") });
+    throw new Error(errors.slice(0, 3).join("; "));
+  }
+  updateOddsHealth({
+    provider: oddsProvider,
+    configured: true,
+    status: oddsProviderBlockedUntil > Date.now() ? "degraded" : "healthy",
+    lastSuccessfulRequestAt: new Date().toISOString(),
+    lastError: errors[0],
+    blockedUntil: oddsProviderBlockedUntil > Date.now() ? new Date(oddsProviderBlockedUntil).toISOString() : undefined,
+  });
   return { matches, errors };
 }
 
@@ -1078,6 +1147,21 @@ async function getFallbackOdds() {
   return fallback;
 }
 
+function cachePayload(payload: OddsPayload, expiresAt: number) {
+  responseCachedAt = Date.now();
+  responseCache = { expiresAt, data: { ...payload, integrationVersion: "bookmaker-hardening-2026-07-13", fetchedAt: new Date(responseCachedAt).toISOString(), fallbackMode } };
+  recordOddsHealth(responseCache.data.matches, responseCachedAt, oddsPregameStaleMs, oddsLiveStaleMs);
+}
+
+function suspendBookmakerMarkets(matches: Match[], reason: string) {
+  return matches.map((match) => match.marketSource === "bookmaker" ? {
+    ...match,
+    marketStatus: "suspended" as const,
+    suspensionReason: reason,
+    trader: { controlled: match.trader?.controlled ?? false, ...match.trader, suspended: true, note: reason },
+  } : match);
+}
+
 export async function GET() {
   if (internalSportsOnly) {
     const internal = getHenriquinhoInternalSports();
@@ -1092,7 +1176,9 @@ export async function GET() {
     return NextResponse.json(payload, { headers: { "Cache-Control": "private, max-age=5" } });
   }
 
-  if (apiFootballRealSnapshot) {
+  // A fixture provider can supply real fixtures to the model, but it is never allowed
+  // to pre-empt a configured bookmaker-odds provider.
+  if (apiFootballRealSnapshot && !oddsApiKey) {
     try {
       const matches = await getApiFootballSnapshotOdds();
       const payload: OddsPayload = {
@@ -1119,6 +1205,7 @@ export async function GET() {
   }
 
   if (responseCache && responseCache.expiresAt > Date.now()) {
+    updateOddsHealth({ cacheAgeMs: Date.now() - responseCachedAt });
     return NextResponse.json({ ...responseCache.data, cached: true }, { headers: { "Cache-Control": "private, max-age=10" } });
   }
 
@@ -1134,7 +1221,8 @@ export async function GET() {
         message: realOdds.errors.length ? "Realtime bookmaker odds loaded for active supported markets." : "Realtime bookmaker odds loaded",
         providerError: realOdds.errors[0],
       };
-      responseCache = { expiresAt: Date.now() + oddsCacheTtlMs, data: payload };
+      const refreshMs = realOdds.matches.some((match) => match.status === "live") ? oddsLiveRefreshMs : oddsPregameRefreshMs;
+      cachePayload(payload, nextRefreshBoundary(refreshMs));
       lastGoodRealOdds = payload;
       return NextResponse.json(payload, { headers: { "Cache-Control": "private, max-age=10" } });
     }
@@ -1143,7 +1231,7 @@ export async function GET() {
     const matches = realOddsOnly ? fallback.map(stripEstimatedMarkets) : fallback;
     const payload: OddsPayload = {
       source: realOddsOnly ? "espn-public" : "henriquinho-model",
-      oddsSource: realOddsOnly ? "real-provider" : "model-provider",
+      oddsSource: realOddsOnly ? "unavailable" : "model-provider",
       configured: Boolean(oddsApiKey),
       realOddsOnly,
       matches,
@@ -1154,24 +1242,25 @@ export async function GET() {
         : "Henriquinho model odds loaded. Add THE_ODDS_API_KEY for bookmaker odds.",
       providerError: oddsApiKey ? "The Odds API returned no active bookmaker odds for these events yet." : undefined,
     };
-    responseCache = { expiresAt: nextMinuteBoundary(), data: payload };
+    cachePayload(payload, nextMinuteBoundary());
     return NextResponse.json(payload, { headers: { "Cache-Control": "private, max-age=10" } });
   } catch (error) {
     if (lastGoodRealOdds) {
       const payload: OddsPayload = {
         ...lastGoodRealOdds,
+        matches: suspendBookmakerMarkets(lastGoodRealOdds.matches, "Bookmaker provider refresh failed"),
         stale: true,
-        message: "Showing last good bookmaker odds while provider refreshes.",
+        message: "Bookmaker markets suspended while the provider refreshes.",
         providerError: error instanceof Error ? error.message : "Unknown odds provider error",
       };
-      responseCache = { expiresAt: Date.now() + oddsCacheTtlMs, data: payload };
+      cachePayload(payload, nextMinuteBoundary());
       return NextResponse.json(payload, { headers: { "Cache-Control": "private, max-age=10" } });
     }
     const fallback = await getFallbackOdds().catch(() => []);
     const matches = realOddsOnly ? fallback.map(stripEstimatedMarkets) : fallback;
     const payload: OddsPayload = {
       source: realOddsOnly ? "espn-public" : "henriquinho-model",
-      oddsSource: realOddsOnly ? "real-provider" : "model-provider",
+      oddsSource: realOddsOnly ? "unavailable" : "model-provider",
       configured: Boolean(oddsApiKey),
       realOddsOnly,
       matches,
@@ -1186,7 +1275,7 @@ export async function GET() {
       oddsProviderBlockedUntil = Date.now() + oddsErrorCacheTtlMs;
       oddsProviderBlockedReason = payload.providerError;
     }
-    responseCache = { expiresAt: realOddsOnly ? Date.now() + oddsErrorCacheTtlMs : nextMinuteBoundary(), data: payload };
+    cachePayload(payload, realOddsOnly ? Date.now() + oddsErrorCacheTtlMs : nextMinuteBoundary());
     return NextResponse.json(payload, { headers: { "Cache-Control": "private, max-age=10" } });
   }
 }

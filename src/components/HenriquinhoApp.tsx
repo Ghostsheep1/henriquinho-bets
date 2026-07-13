@@ -22,6 +22,7 @@ import Image from "next/image";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
 import { featuredLeagues, starterTransactions } from "@/lib/seed";
+import { isMarketBettable, priceForPick, validateSlipAtPlacement } from "@/lib/odds/marketSafety";
 import type { Bet, BetPick, Match, SportKey, Transaction } from "@/lib/types";
 
 const currency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
@@ -66,6 +67,8 @@ const adminEmail = "henrique@henriquinhobets.com";
 const adminPassword = "HenriqueAdmin2026!";
 const supportEmail = "hsribeiro1@gmail.com";
 const casinoHouseEdge = 0.04;
+const pregameOddsMaxAgeMs = 15 * 60 * 1000;
+const liveOddsMaxAgeMs = 90 * 1000;
 type VolatilityMode = "Chill" | "Turbo" | "Wild";
 
 const volatilityProfiles: Record<VolatilityMode, { edge: number; variance: number; bonusChance: number; note: string }> = {
@@ -370,7 +373,7 @@ type SportsPayload = {
   realOddsOnly?: boolean;
   cached?: boolean;
   stale?: boolean;
-  oddsSource?: "real-provider" | "model-provider" | "calculated-demo";
+  oddsSource?: "real-provider" | "model-provider" | "calculated-demo" | "unavailable";
 };
 
 const casinoCategories = ["All", "Blaze Games", "Slots", "Table Games", "Live", "Map Games", "Sports Arcade", "Instant Win"] as const;
@@ -451,17 +454,11 @@ function isInPlayMarket(match: Match) {
 }
 
 function oddsAreFresh(match: Match) {
-  if (match.source === "henriquinho-internal") return true;
-  if (match.oddsSource === "model-provider") return true;
-  if (match.oddsSource !== "real-provider") return false;
-  const updatedAt = new Date(match.oddsUpdatedAt ?? "").getTime();
-  if (!Number.isFinite(updatedAt)) return false;
-  const maxAge = match.status === "live" ? 30 * 60 * 1000 : 2 * 60 * 60 * 1000;
-  return Date.now() - updatedAt <= maxAge;
+  return isMarketBettable(match, Date.now(), pregameOddsMaxAgeMs, liveOddsMaxAgeMs);
 }
 
 function bettingPaused(match: Match) {
-  return Boolean(match.trader?.suspended) || (match.status === "live" && !oddsAreFresh(match));
+  return Boolean(match.trader?.suspended) || !oddsAreFresh(match);
 }
 
 function hasBookmakerOdds(match: Match) {
@@ -552,21 +549,8 @@ function settlePicksFromMatches(picks: BetPick[], matchById: Map<string, Match>)
 }
 
 function currentPickOdds(pick: BetPick, match?: Match) {
-  if (!match?.odds || bettingPaused(match)) return null;
-  if (pick.market === "moneyline") {
-    if (pick.label === match.home) return match.odds.moneyline.home;
-    if (pick.label === match.away) return match.odds.moneyline.away;
-    if (pick.label === "Draw") return match.odds.moneyline.draw ?? null;
-  }
-  if (pick.market === "total" && match.odds.total) {
-    if (pick.label.startsWith("Over")) return match.odds.total.over;
-    if (pick.label.startsWith("Under")) return match.odds.total.under;
-  }
-  if (pick.market === "handicap" && match.odds.handicap) {
-    if (pick.label.startsWith(match.home)) return match.odds.handicap.home;
-    if (pick.label.startsWith(match.away)) return match.odds.handicap.away;
-  }
-  return null;
+  if (!match || bettingPaused(match)) return null;
+  return priceForPick(pick, match);
 }
 
 function cashOutOffer(bet: Bet, matchById: Map<string, Match>) {
@@ -720,6 +704,7 @@ export default function HenriquinhoApp() {
   const [transactions, setTransactions] = useState<Transaction[]>(starterTransactions);
   const [bets, setBets] = useState<Bet[]>([]);
   const [slip, setSlip] = useState<BetPick[]>([]);
+  const [betNotice, setBetNotice] = useState<string | null>(null);
   const [stake, setStake] = useState(25);
   const [lastBonus, setLastBonus] = useState<string | null>(null);
   const [depositOpen, setDepositOpen] = useState(false);
@@ -803,10 +788,17 @@ export default function HenriquinhoApp() {
 
   const placeBet = () => {
     if (!slip.length || stake <= 0 || stake > balance || stake > slipMaxStake) return;
-    const bet: Bet = { id: uid("bet"), picks: slip, stake, potentialWin, status: "open", createdAt: new Date().toISOString() };
+    if (!validateSlipAtPlacement(slip, matchById, Date.now(), pregameOddsMaxAgeMs, liveOddsMaxAgeMs)) {
+      setBetNotice("One or more prices changed or the market was suspended. Review the refreshed market before placing a bet.");
+      setSlip([]);
+      return;
+    }
+    const recordedPicks = slip.map((pick) => ({ ...pick, recordedPrice: pick.recordedPrice ?? pick.odds }));
+    const bet: Bet = { id: uid("bet"), picks: recordedPicks, stake, potentialWin, status: "open", createdAt: new Date().toISOString() };
     setBets((items) => [bet, ...items]);
     addTransaction("bet_stake", -stake, `${slip.length > 1 ? "Parlay" : "Single"} bet placed`);
     setSlip([]);
+    setBetNotice(null);
   };
 
   const settleBet = (id: string) => {
@@ -966,13 +958,13 @@ export default function HenriquinhoApp() {
           {active === "admin" && isAdmin && <AdminView bets={bets} transactions={transactions} lockedAccounts={lockedAccounts} unlockAccount={unlockAccount} />}
         </main>
         <aside className="hidden w-80 shrink-0 space-y-4 xl:block">
-          <BetSlip slip={slip} setSlip={setSlip} stake={stake} setStake={setStake} balance={balance} maxStake={slipMaxStake} placeBet={placeBet} combinedOdds={combinedOdds} potentialWin={potentialWin} />
+          <BetSlip slip={slip} setSlip={setSlip} stake={stake} setStake={setStake} balance={balance} maxStake={slipMaxStake} placeBet={placeBet} combinedOdds={combinedOdds} potentialWin={potentialWin} notice={betNotice} />
           <Leaderboard user={user} balance={balance} />
           {!user?.guest && <BetHistory bets={bets} settleBet={settleBet} cashOutBet={cashOutBet} cashOutValue={(bet) => cashOutOffer(bet, matchById)} />}
         </aside>
       </div>
       <div className="sticky bottom-0 z-30 border-t border-white/10 bg-[#08100d]/95 p-3 backdrop-blur xl:hidden">
-        <BetSlip compact slip={slip} setSlip={setSlip} stake={stake} setStake={setStake} balance={balance} maxStake={slipMaxStake} placeBet={placeBet} combinedOdds={combinedOdds} potentialWin={potentialWin} />
+        <BetSlip compact slip={slip} setSlip={setSlip} stake={stake} setStake={setStake} balance={balance} maxStake={slipMaxStake} placeBet={placeBet} combinedOdds={combinedOdds} potentialWin={potentialWin} notice={betNotice} />
       </div>
       <Footer />
       <DepositModal open={depositOpen} onClose={() => setDepositOpen(false)} onComplete={completeDeposit} />
@@ -1369,16 +1361,16 @@ function MatchCard({ match, addPick, slip, isAdmin }: { match: Match; addPick: (
   const bettingOpen = (match.status === "live" || match.status === "upcoming") && !paused;
   const maxStake = match.risk?.maxStake;
   const picks: BetPick[] = match.odds && bettingOpen ? [
-    { id: `${match.id}-home`, matchId: match.id, label: match.home, market: "moneyline", odds: match.odds.moneyline.home, event, maxStake },
-    ...(match.odds.moneyline.draw ? [{ id: `${match.id}-draw`, matchId: match.id, label: "Draw", market: "moneyline" as const, odds: match.odds.moneyline.draw, event, maxStake }] : []),
-    { id: `${match.id}-away`, matchId: match.id, label: match.away, market: "moneyline", odds: match.odds.moneyline.away, event, maxStake },
+    { id: `${match.id}-home`, matchId: match.id, label: match.home, market: "moneyline", odds: match.odds.moneyline.home, recordedPrice: match.odds.moneyline.home, event, maxStake, source: match.marketSource, provider: match.provider, providerEventId: match.providerEventId, providerLastUpdated: match.providerLastUpdated, fetchedAt: match.fetchedAt },
+    ...(match.odds.moneyline.draw ? [{ id: `${match.id}-draw`, matchId: match.id, label: "Draw", market: "moneyline" as const, odds: match.odds.moneyline.draw, recordedPrice: match.odds.moneyline.draw, event, maxStake, source: match.marketSource, provider: match.provider, providerEventId: match.providerEventId, providerLastUpdated: match.providerLastUpdated, fetchedAt: match.fetchedAt }] : []),
+    { id: `${match.id}-away`, matchId: match.id, label: match.away, market: "moneyline", odds: match.odds.moneyline.away, recordedPrice: match.odds.moneyline.away, event, maxStake, source: match.marketSource, provider: match.provider, providerEventId: match.providerEventId, providerLastUpdated: match.providerLastUpdated, fetchedAt: match.fetchedAt },
     ...(match.odds.total ? [
-      { id: `${match.id}-over`, matchId: match.id, label: `Over ${match.odds.total.line}`, market: "total" as const, odds: match.odds.total.over, event, maxStake },
-      { id: `${match.id}-under`, matchId: match.id, label: `Under ${match.odds.total.line}`, market: "total" as const, odds: match.odds.total.under, event, maxStake },
+      { id: `${match.id}-over`, matchId: match.id, label: `Over ${match.odds.total.line}`, market: "total" as const, odds: match.odds.total.over, recordedPrice: match.odds.total.over, event, maxStake, source: match.marketSource, provider: match.provider, providerEventId: match.providerEventId, providerLastUpdated: match.providerLastUpdated, fetchedAt: match.fetchedAt },
+      { id: `${match.id}-under`, matchId: match.id, label: `Under ${match.odds.total.line}`, market: "total" as const, odds: match.odds.total.under, recordedPrice: match.odds.total.under, event, maxStake, source: match.marketSource, provider: match.provider, providerEventId: match.providerEventId, providerLastUpdated: match.providerLastUpdated, fetchedAt: match.fetchedAt },
     ] : []),
     ...(match.odds.handicap ? [
-      { id: `${match.id}-spread-home`, matchId: match.id, label: `${match.home} ${match.odds.handicap.line}`, market: "handicap" as const, odds: match.odds.handicap.home, event, maxStake },
-      { id: `${match.id}-spread-away`, matchId: match.id, label: `${match.away} ${-match.odds.handicap.line}`, market: "handicap" as const, odds: match.odds.handicap.away, event, maxStake },
+      { id: `${match.id}-spread-home`, matchId: match.id, label: `${match.home} ${match.odds.handicap.line}`, market: "handicap" as const, odds: match.odds.handicap.home, recordedPrice: match.odds.handicap.home, event, maxStake, source: match.marketSource, provider: match.provider, providerEventId: match.providerEventId, providerLastUpdated: match.providerLastUpdated, fetchedAt: match.fetchedAt },
+      { id: `${match.id}-spread-away`, matchId: match.id, label: `${match.away} ${-match.odds.handicap.line}`, market: "handicap" as const, odds: match.odds.handicap.away, recordedPrice: match.odds.handicap.away, event, maxStake, source: match.marketSource, provider: match.provider, providerEventId: match.providerEventId, providerLastUpdated: match.providerLastUpdated, fetchedAt: match.fetchedAt },
     ] : []),
   ] : [];
   return (
@@ -1453,7 +1445,7 @@ function StatPill({ label, home, away, suffix = "" }: { label: string; home: num
   );
 }
 
-function BetSlip({ compact: small, slip, setSlip, stake, setStake, balance, maxStake, placeBet, combinedOdds, potentialWin }: { compact?: boolean; slip: BetPick[]; setSlip: React.Dispatch<React.SetStateAction<BetPick[]>>; stake: number; setStake: (stake: number) => void; balance: number; maxStake: number; placeBet: () => void; combinedOdds: number; potentialWin: number }) {
+function BetSlip({ compact: small, slip, setSlip, stake, setStake, balance, maxStake, placeBet, combinedOdds, potentialWin, notice }: { compact?: boolean; slip: BetPick[]; setSlip: React.Dispatch<React.SetStateAction<BetPick[]>>; stake: number; setStake: (stake: number) => void; balance: number; maxStake: number; placeBet: () => void; combinedOdds: number; potentialWin: number; notice?: string | null }) {
   const stakeLimit = Math.min(balance, maxStake);
   return (
     <div className="rounded-md border border-emerald-300/20 bg-[#0b1210] p-4">
@@ -1488,6 +1480,7 @@ function BetSlip({ compact: small, slip, setSlip, stake, setStake, balance, maxS
         </div>
       </div>
       {slip.length > 0 && <div className="mt-2 text-xs text-slate-400">Account/market risk max: {currency.format(stakeLimit)}</div>}
+      {notice && <div className="mt-3 rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs font-semibold text-amber-100">{notice}</div>}
       <button disabled={!slip.length || stake > balance || stake > stakeLimit} onClick={placeBet} className="mt-3 w-full rounded-md bg-emerald-400 px-4 py-3 font-black text-black disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400">
         Place bet {combinedOdds > 1 ? `@ ${compact.format(combinedOdds)}` : ""}
       </button>
@@ -2638,9 +2631,9 @@ function AdminView({ bets, transactions, lockedAccounts, unlockAccount }: { bets
         <Stat label="Top game" value={mostPlayed} />
       </div>
       <div className="rounded-md border border-white/10 bg-[#0b1210] p-4">
-        <h2 className="mb-3 font-black text-white">Automation status</h2>
+        <h2 className="mb-3 font-black text-white">Operations status</h2>
         <div className="grid gap-3 md:grid-cols-3">
-          {["Live event feeds", "Realtime odds feed", "Supabase realtime wallet"].map((item) => <div key={item} className="rounded-md bg-emerald-400/10 p-4 text-emerald-100"><Crown className="mb-2 h-5 w-5" />{item}<div className="mt-1 text-xs text-slate-400">Ready for production</div></div>)}
+          {["Live event feeds", "Bookmaker odds feed", "Supabase realtime wallet"].map((item) => <div key={item} className="rounded-md bg-emerald-400/10 p-4 text-emerald-100"><Crown className="mb-2 h-5 w-5" />{item}<div className="mt-1 text-xs text-slate-400">Check the protected odds health endpoint before release.</div></div>)}
         </div>
       </div>
       <div className="rounded-md border border-white/10 bg-[#0b1210] p-4">
