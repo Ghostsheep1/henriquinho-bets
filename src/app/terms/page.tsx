@@ -1,0 +1,3 @@
+export default function TermsPage() {
+  return <main className="min-h-screen bg-[#070a0c] p-6 text-slate-100"><article className="mx-auto max-w-3xl space-y-4 rounded-md border border-white/10 bg-[#0b1210] p-6"><h1 className="text-3xl font-black">Terms of Service</h1><p>HenriquinhoBets is a virtual-coin beta. It does not accept or pay real money. You must be at least 18 years old to use it.</p><p>Accounts may be suspended or locked to protect users, the service, and its integrity. Do not attempt to bypass account restrictions or access controls.</p><p>Sports and casino displays are for entertainment and testing. Features, availability, and virtual balances may change during beta.</p></article></main>;
+}
