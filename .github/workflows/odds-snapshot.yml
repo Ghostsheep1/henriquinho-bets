@@ -5,17 +5,20 @@ on:
     - cron: "0 */2 * * *"
   workflow_dispatch:
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   refresh:
     runs-on: ubuntu-latest
     steps:
       - name: Request protected production snapshot refresh
-        env:
-          SNAPSHOT_URL: ${{ secrets.HENRIQUINHO_SNAPSHOT_CRON_URL }}
-          CRON_SECRET: ${{ secrets.HENRIQUINHO_CRON_SECRET }}
         run: |
-          test -n "$SNAPSHOT_URL"
-          test -n "$CRON_SECRET"
+          token_response="$(curl --fail --silent --show-error \
+            --header "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=henriquinho-bets-snapshot")"
+          id_token="$(printf '%s' "$token_response" | jq --exit-status --raw-output '.value')"
           curl --fail --silent --show-error \
-            --header "Authorization: Bearer $CRON_SECRET" \
-            "$SNAPSHOT_URL"
+            --header "Authorization: Bearer $id_token" \
+            "https://henriquinhobets.vercel.app/api/cron/odds-snapshot"
