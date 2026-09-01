@@ -105,7 +105,7 @@ export type Bet = {
 
 export type Transaction = {
   id: string;
-  type: "signup_bonus" | "daily_bonus" | "deposit" | "bet_stake" | "bet_win" | "bet_cashout" | "casino_win" | "casino_loss";
+  type: "signup_bonus" | "daily_bonus" | "deposit" | "withdrawal" | "bet_stake" | "bet_win" | "bet_cashout" | "casino_win" | "casino_loss";
   amount: number;
   label: string;
   createdAt: string;

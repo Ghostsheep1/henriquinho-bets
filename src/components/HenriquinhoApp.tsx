@@ -966,7 +966,7 @@ export default function HenriquinhoApp({
       <div className="mx-auto flex max-w-[1540px] gap-4 px-3 pb-8 pt-3 sm:px-5">
         <Sidebar active={active} setActive={setActive} open={menuOpen} setOpen={setMenuOpen} language={language} isAdmin={isAdmin} />
         <main className="min-w-0 flex-1 space-y-4">
-          <Hero setActive={setActive} language={language} />
+          {(active === "sports" || active === "live") && <Hero setActive={setActive} language={language} />}
           {active === "sports" && <Sportsbook matches={matches} worldCup={worldCup} loading={loading} message={message} slip={slip} setSlip={setSlip} isAdmin={isAdmin} />}
           {active === "live" && <Sportsbook liveOnly matches={matches} worldCup={worldCup} loading={loading} message={message} slip={slip} setSlip={setSlip} isAdmin={isAdmin} />}
           {active === "casino" && <Casino balance={balance} soundOn={soundOn} onResult={casinoResult} />}
@@ -975,14 +975,14 @@ export default function HenriquinhoApp({
           {active === "admin" && isAdmin && <AdminView bets={bets} transactions={transactions} lockedAccounts={lockedAccounts} unlockAccount={unlockAccount} />}
         </main>
         <aside className="hidden w-80 shrink-0 space-y-4 xl:block">
-          <BetSlip slip={slip} setSlip={setSlip} stake={stake} setStake={setStake} balance={balance} maxStake={slipMaxStake} placeBet={placeBet} combinedOdds={combinedOdds} potentialWin={potentialWin} notice={betNotice} />
+          {(active === "sports" || active === "live") && <BetSlip slip={slip} setSlip={setSlip} stake={stake} setStake={setStake} balance={balance} maxStake={slipMaxStake} placeBet={placeBet} combinedOdds={combinedOdds} potentialWin={potentialWin} notice={betNotice} />}
           <Leaderboard user={user} balance={balance} />
           {!user?.guest && <BetHistory bets={bets} settleBet={settleBet} cashOutBet={cashOutBet} cashOutValue={(bet) => cashOutOffer(bet, matchById)} />}
         </aside>
       </div>
-      <div className="sticky bottom-0 z-30 border-t border-white/10 bg-[#08100d]/95 p-3 backdrop-blur xl:hidden">
+      {(active === "sports" || active === "live") && <div className="sticky bottom-0 z-30 border-t border-white/10 bg-[#08100d]/95 p-3 backdrop-blur xl:hidden">
         <BetSlip compact slip={slip} setSlip={setSlip} stake={stake} setStake={setStake} balance={balance} maxStake={slipMaxStake} placeBet={placeBet} combinedOdds={combinedOdds} potentialWin={potentialWin} notice={betNotice} />
-      </div>
+      </div>}
       <Footer />
       <DepositModal open={depositOpen} onClose={() => setDepositOpen(false)} onComplete={completeDeposit} />
     </div>
@@ -2495,11 +2495,19 @@ function WalletView({ user, balance, claimBonus, transactions, onDeposit, onLock
 }
 
 function TransactionList({ transactions }: { transactions: Transaction[] }) {
+  const [filter, setFilter] = useState<"all" | "withdrawals" | "winnings" | "losses">("all");
+  const visibleTransactions = transactions.filter((item) => {
+    if (filter === "withdrawals") return item.type === "withdrawal";
+    if (filter === "winnings") return item.amount > 0 && item.type !== "deposit" && !item.type.endsWith("bonus");
+    if (filter === "losses") return item.amount < 0;
+    return true;
+  });
   return (
     <div className="rounded-md border border-white/10 bg-[#0b1210] p-4">
-      <h2 className="mb-3 font-black text-white">Transaction history</h2>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3"><h2 className="font-black text-white">Transaction history</h2><div className="flex flex-wrap gap-1">{(["all", "withdrawals", "winnings", "losses"] as const).map((item) => <button key={item} onClick={() => setFilter(item)} className={clsx("rounded px-2 py-1 text-xs font-bold capitalize", filter === item ? "bg-emerald-400 text-black" : "bg-white/10 text-slate-300")}>{item}</button>)}</div></div>
       <div className="space-y-2">
-        {transactions.map((item) => (
+        {visibleTransactions.length === 0 && <div className="rounded-md bg-white/[0.04] px-3 py-6 text-center text-sm text-slate-400">No {filter === "all" ? "transactions" : filter} yet.</div>}
+        {visibleTransactions.map((item) => (
           <div key={item.id} className="flex items-center justify-between gap-3 rounded-md bg-white/[0.04] px-3 py-3 text-sm">
             <div>
               <div className="font-bold text-white">{item.label}</div>
@@ -2643,8 +2651,40 @@ function AdminView({ bets, transactions, lockedAccounts, unlockAccount }: { bets
           ))}
         </div>
       </div>
+      <AdminAccounts />
     </section>
   );
+}
+
+type ManagedAccount = { id: string; display_name: string; role: "player" | "admin"; account_status: "active" | "suspended" | "locked"; created_at: string };
+
+function AdminAccounts() {
+  const [accounts, setAccounts] = useState<ManagedAccount[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const load = async () => {
+    setLoading(true); setError("");
+    try {
+      const response = await fetch("/api/admin/users", { cache: "no-store" });
+      const payload = await response.json() as { accounts?: ManagedAccount[]; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "Unable to load accounts");
+      setAccounts(payload.accounts ?? []);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to load accounts"); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { void load(); }, []);
+  const update = async (account: ManagedAccount, role: ManagedAccount["role"], accountStatus: ManagedAccount["account_status"]) => {
+    setBusyId(account.id); setError("");
+    try {
+      const response = await fetch("/api/admin/users", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: account.id, role, accountStatus }) });
+      const payload = await response.json() as { account?: ManagedAccount; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "Unable to update account");
+      setAccounts((items) => items.map((item) => item.id === account.id ? { ...item, ...(payload.account ?? { role, account_status: accountStatus }) } : item));
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to update account"); }
+    finally { setBusyId(null); }
+  };
+  return <section className="rounded-md border border-white/10 bg-[#0b1210] p-4"><div className="mb-3 flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-black text-white">Account management</h2><p className="text-xs text-slate-400">Manage active players, administrators, and access status from this protected operator area.</p></div><button onClick={() => void load()} className="rounded border border-white/10 px-3 py-2 text-xs font-bold">Refresh</button></div>{error && <p className="mb-3 rounded bg-red-500/10 p-3 text-sm text-red-100">{error}</p>}{loading ? <p className="text-sm text-slate-400">Loading accounts…</p> : <div className="space-y-2">{accounts.map((account) => <div key={account.id} className="grid gap-2 rounded-md bg-white/[0.04] p-3 text-sm md:grid-cols-[minmax(0,1fr)_130px_130px]"><div><div className="font-black text-white">{account.display_name}</div><div className="text-xs text-slate-400">Created {new Date(account.created_at).toLocaleDateString()} · {account.id}</div></div><select aria-label={`Role for ${account.display_name}`} value={account.role} disabled={busyId === account.id} onChange={(event) => void update(account, event.target.value as ManagedAccount["role"], account.account_status)} className="rounded bg-black/30 px-2 py-2"><option value="player">Player</option><option value="admin">Admin</option></select><select aria-label={`Status for ${account.display_name}`} value={account.account_status} disabled={busyId === account.id} onChange={(event) => void update(account, account.role, event.target.value as ManagedAccount["account_status"])} className="rounded bg-black/30 px-2 py-2"><option value="active">Active</option><option value="suspended">Suspended</option><option value="locked">Locked</option></select></div>)}{accounts.length === 0 && <p className="text-sm text-slate-400">No accounts found.</p>}</div>}</section>;
 }
 
 function Stat({ label, value }: { label: string; value: string }) {

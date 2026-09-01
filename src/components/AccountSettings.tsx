@@ -16,6 +16,25 @@ export default function AccountSettings() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [guest, setGuest] = useState(false);
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const [fontSize, setFontSize] = useState<"standard" | "large" | "extra-large">("standard");
+
+  const applyAccessibility = (nextTheme: "dark" | "light", nextFontSize: "standard" | "large" | "extra-large") => {
+    document.documentElement.dataset.theme = nextTheme;
+    document.documentElement.dataset.fontSize = nextFontSize;
+    localStorage.setItem("henriquinho-accessibility", JSON.stringify({ theme: nextTheme, fontSize: nextFontSize }));
+  };
+
+  useEffect(() => {
+    const saved = localStorage.getItem("henriquinho-accessibility");
+    if (!saved) return;
+    try {
+      const parsed = JSON.parse(saved) as { theme?: "dark" | "light"; fontSize?: "standard" | "large" | "extra-large" };
+      const nextTheme = parsed.theme === "light" ? "light" : "dark";
+      const nextFontSize = parsed.fontSize === "large" || parsed.fontSize === "extra-large" ? parsed.fontSize : "standard";
+      setTheme(nextTheme); setFontSize(nextFontSize); applyAccessibility(nextTheme, nextFontSize);
+    } catch { /* Ignore a malformed local preference. */ }
+  }, []);
 
   useEffect(() => {
     const client = supabase;
@@ -62,6 +81,7 @@ export default function AccountSettings() {
   };
 
   const signOut = async () => { await supabase?.auth.signOut(); router.replace("/login"); };
+  const saveAccessibility = (event: React.FormEvent) => { event.preventDefault(); applyAccessibility(theme, fontSize); setNotice("Accessibility preferences saved."); };
 
   if (!isSupabaseConfigured) return <Shell><p>Supabase public configuration is required.</p></Shell>;
   if (loading) return <Shell><Loader2 className="animate-spin text-emerald-300" /></Shell>;
@@ -70,6 +90,7 @@ export default function AccountSettings() {
     <SettingsForm title="Profile" onSubmit={saveName}><Label label="Display name" value={name} onChange={setName} autoComplete="name" /><button disabled={busy} className="primary">Save name</button></SettingsForm>
     <SettingsForm title={guest ? "Add a verified email" : "Email"} onSubmit={saveEmail}><Label label="Email" value={nextEmail} onChange={setNextEmail} type="email" autoComplete="email" /><p className="text-xs text-slate-400">{guest ? "Supabase will verify this address before this guest account becomes recoverable." : "Changing email requires Supabase verification before the new address becomes active."}</p><button disabled={busy || (!guest && nextEmail === email)} className="primary">{guest ? "Save email" : "Change email"}</button></SettingsForm>
     <SettingsForm title={guest ? "Create a password" : "Password"} onSubmit={savePassword}><Label label="New password" value={password} onChange={setPassword} type="password" autoComplete="new-password" /><button disabled={busy || password.length < 8} className="primary">{guest ? "Save password" : "Change password"}</button></SettingsForm>
+    <SettingsForm title="Accessibility" onSubmit={saveAccessibility}><label className="block text-sm font-bold">Appearance<select value={theme} onChange={(event) => setTheme(event.target.value as "dark" | "light")} className="mt-1 w-full rounded border border-white/15 bg-black/30 px-3 py-3"><option value="dark">Dark mode</option><option value="light">Light mode</option></select></label><label className="block text-sm font-bold">Font size<select value={fontSize} onChange={(event) => setFontSize(event.target.value as "standard" | "large" | "extra-large")} className="mt-1 w-full rounded border border-white/15 bg-black/30 px-3 py-3"><option value="standard">Standard</option><option value="large">Large</option><option value="extra-large">Extra large</option></select></label><button className="primary">Save accessibility settings</button></SettingsForm>
     {notice && <p className="rounded bg-emerald-400/10 p-3 text-sm text-emerald-100">{notice}</p>}{error && <p className="rounded bg-red-500/10 p-3 text-sm text-red-100">{error}</p>}
   </Shell>;
 }
