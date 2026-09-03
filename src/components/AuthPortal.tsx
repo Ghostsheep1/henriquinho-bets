@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Apple, Globe2, Loader2, ShieldCheck } from "lucide-react";
+import { Apple, CheckCircle2, Globe2, Loader2, MailCheck, RefreshCw, ShieldCheck } from "lucide-react";
 import HenriquinhoApp from "@/components/HenriquinhoApp";
 import { canResendVerification, isAdultBirthDate, mayAccessPlayer, type AccountStatus, type AppRole } from "@/lib/auth";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
@@ -27,6 +27,7 @@ export default function AuthPortal({ screen = "login", redirectAuthenticated = f
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [resendAt, setResendAt] = useState(0);
+  const [verificationChecked, setVerificationChecked] = useState(false);
   const [destination, setDestination] = useState("/");
   const googleEnabled = process.env.NEXT_PUBLIC_GOOGLE_AUTH_ENABLED === "true";
   const appleEnabled = process.env.NEXT_PUBLIC_APPLE_AUTH_ENABLED === "true";
@@ -34,8 +35,10 @@ export default function AuthPortal({ screen = "login", redirectAuthenticated = f
   const activeScreen = useMemo<Screen>(() => screen, [screen]);
 
   useEffect(() => {
-    const requested = new URLSearchParams(window.location.search).get("next");
+    const params = new URLSearchParams(window.location.search);
+    const requested = params.get("next");
     setDestination(requested?.startsWith("/") ? requested : "/");
+    if (screen === "verify") setEmail(params.get("email") ?? "");
   }, []);
 
   useEffect(() => {
@@ -82,11 +85,12 @@ export default function AuthPortal({ screen = "login", redirectAuthenticated = f
       if (activeScreen === "signup") {
         if (!isAdultBirthDate(birthDate)) throw new Error("You must be at least 18 years old to create an account.");
         if (!termsAccepted) throw new Error("You must accept the Terms of Service and Privacy Policy.");
-        const { error: signUpError } = await supabase.auth.signUp({ email, password, options: { emailRedirectTo: redirectUrl("/login"), data: { display_name: name.trim(), birth_date: birthDate, terms_accepted: true } } });
+        const { error: signUpError } = await supabase.auth.signUp({ email, password, options: { emailRedirectTo: redirectUrl("/auth/callback?next=/verify"), data: { display_name: name.trim(), birth_date: birthDate, terms_accepted: true } } });
         if (signUpError) throw signUpError;
         const { data: current } = await supabase.auth.getUser();
         if (current.user?.email_confirmed_at) await supabase.rpc("complete_my_profile", { next_name: name.trim(), next_birth_date: birthDate, accepted_terms: true });
-        setNotice("Check your email to verify your account before signing in.");
+        router.replace(`/verify?email=${encodeURIComponent(email.trim())}`);
+        return;
       } else if (activeScreen === "login") {
         const { data, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
         if (signInError) throw signInError;
@@ -130,9 +134,19 @@ export default function AuthPortal({ screen = "login", redirectAuthenticated = f
   const resend = async () => {
     if (!supabase || !canResendVerification(resendAt)) return;
     setBusy(true); setError("");
-    const { error: resendError } = await supabase.auth.resend({ type: "signup", email, options: { emailRedirectTo: redirectUrl("/login") } });
+    const { error: resendError } = await supabase.auth.resend({ type: "signup", email, options: { emailRedirectTo: redirectUrl("/auth/callback?next=/verify") } });
     setBusy(false);
     if (resendError) setError(resendError.message); else { setResendAt(Date.now()); setNotice("Verification email resent. Please wait one minute before requesting another."); }
+  };
+
+  const checkVerification = async () => {
+    if (!supabase) return;
+    setBusy(true); setError(""); setNotice("");
+    const { data, error: userError } = await supabase.auth.getUser();
+    setBusy(false);
+    if (userError) { setError("We could not check your confirmation yet. Please open the newest confirmation email and try again."); return; }
+    if (data.user?.email_confirmed_at) { setNotice("Email confirmed. Opening your account…"); router.replace(destination); return; }
+    setVerificationChecked(true);
   };
 
   const signOut = async () => { await supabase?.auth.signOut(); setProfile(null); router.replace("/login"); };
@@ -145,15 +159,23 @@ export default function AuthPortal({ screen = "login", redirectAuthenticated = f
   }
 
   const verify = activeScreen === "verify";
-  return <AuthShell title={verify ? "Verify your email" : activeScreen === "signup" ? "Create your account" : activeScreen === "forgot" ? "Reset password" : activeScreen === "reset" ? "Choose a new password" : "Welcome back"}>
+  return <AuthShell title={verify ? "Check your inbox" : activeScreen === "signup" ? "Create your account" : activeScreen === "forgot" ? "Reset password" : activeScreen === "reset" ? "Choose a new password" : "Welcome back"}>
+    {verify && <div className="mb-5 rounded-xl border border-emerald-300/25 bg-emerald-400/10 p-4 text-sm text-slate-100">
+      <div className="mb-3 flex items-center gap-2 font-black text-emerald-200"><MailCheck className="h-5 w-5" /> One last step</div>
+      <ol className="space-y-2 text-slate-200">
+        <li><span className="mr-2 font-black text-emerald-300">1.</span>Open the confirmation email we sent{email ? <> to <strong className="break-all text-white">{email}</strong></> : ""}.</li>
+        <li><span className="mr-2 font-black text-emerald-300">2.</span>Select the confirmation link in that email.</li>
+        <li><span className="mr-2 font-black text-emerald-300">3.</span>Come back here only if we do not open your account automatically.</li>
+      </ol>
+    </div>}
     <form onSubmit={submit} className="space-y-3">
       {activeScreen === "signup" && <><Field label="Name" value={name} onChange={setName} autoComplete="name" /><Field label="Date of birth" value={birthDate} onChange={setBirthDate} type="date" autoComplete="bday" /><label className="flex gap-2 text-sm text-slate-200"><input required checked={termsAccepted} onChange={(event) => setTermsAccepted(event.target.checked)} type="checkbox" className="mt-1 accent-emerald-300" /><span>I am 18 or older and accept the <a className="underline text-emerald-200" href="/terms">Terms of Service</a> and <a className="underline text-emerald-200" href="/privacy">Privacy Policy</a>.</span></label></>}
       {activeScreen !== "reset" && <Field label="Email" value={email} onChange={setEmail} type="email" autoComplete="email" />}
       {!verify && activeScreen !== "forgot" && <Field label="Password" value={password} onChange={setPassword} type="password" autoComplete={activeScreen === "signup" ? "new-password" : "current-password"} />}
-      {verify ? <button type="button" disabled={busy || !canResendVerification(resendAt)} onClick={resend} className="w-full rounded bg-emerald-400 py-3 font-black text-black disabled:opacity-50">Resend verification email</button> : <button disabled={busy} className="w-full rounded bg-emerald-400 py-3 font-black text-black disabled:opacity-50">{busy ? "Please wait" : activeScreen === "signup" ? "Create account" : activeScreen === "forgot" ? "Send reset email" : activeScreen === "reset" ? "Update password" : "Sign in"}</button>}
+      {verify ? <><button type="button" disabled={busy} onClick={checkVerification} className="flex w-full items-center justify-center gap-2 rounded bg-emerald-400 py-3 font-black text-black disabled:opacity-50"><CheckCircle2 className="h-4 w-4" />{busy ? "Checking…" : "I've verified — continue"}</button><button type="button" disabled={busy || !email || !canResendVerification(resendAt)} onClick={resend} className="flex w-full items-center justify-center gap-2 rounded border border-emerald-300/50 py-3 font-black text-emerald-100 disabled:opacity-50"><RefreshCw className="h-4 w-4" />{resendAt && !canResendVerification(resendAt) ? "Resend available in one minute" : "Resend confirmation email"}</button></> : <button disabled={busy} className="w-full rounded bg-emerald-400 py-3 font-black text-black disabled:opacity-50">{busy ? "Please wait" : activeScreen === "signup" ? "Create account" : activeScreen === "forgot" ? "Send reset email" : activeScreen === "reset" ? "Update password" : "Sign in"}</button>}
       {(activeScreen === "login" || activeScreen === "signup") && <><button type="button" disabled={busy} onClick={tryGuest} className="w-full rounded border border-amber-300/40 bg-amber-300/10 py-3 font-black text-amber-100 disabled:opacity-50">Try as Guest</button><p className="text-center text-xs text-slate-400">Guest progress is saved on this browser. Create an account later to keep it across devices.</p><div className="flex items-center gap-3 text-xs text-slate-500"><span className="h-px flex-1 bg-white/10" />or<span className="h-px flex-1 bg-white/10" /></div><button type="button" disabled={busy || !googleEnabled} onClick={() => oauth("google")} className="flex w-full items-center justify-center gap-2 rounded border border-white/15 py-3 font-bold disabled:cursor-not-allowed disabled:opacity-45"><Globe2 className="h-4 w-4" />{googleEnabled ? "Continue with Google" : "Google coming soon"}</button><button type="button" disabled={busy || !appleEnabled} onClick={() => oauth("apple")} className="flex w-full items-center justify-center gap-2 rounded border border-white/15 py-3 font-bold disabled:cursor-not-allowed disabled:opacity-45"><Apple className="h-4 w-4" />{appleEnabled ? "Continue with Apple" : "Apple coming soon"}</button></>}
     </form>
-    {notice && <p className="mt-4 rounded bg-emerald-400/10 p-3 text-sm text-emerald-100">{notice}</p>}{error && <p className="mt-4 rounded bg-red-500/10 p-3 text-sm text-red-100">{error}</p>}
+    {notice && <p className="mt-4 rounded bg-emerald-400/10 p-3 text-sm text-emerald-100">{notice}</p>}{error && <p className="mt-4 rounded bg-red-500/10 p-3 text-sm text-red-100">{error}</p>}{verificationChecked && <p className="mt-4 rounded bg-amber-300/10 p-3 text-sm text-amber-100">We still do not see a confirmed session. Use the newest email, check spam/junk, then select its confirmation link. If it has expired, resend above.</p>}
     <div className="mt-5 flex flex-wrap gap-3 text-sm text-emerald-200">{activeScreen !== "login" && <a href="/login">Sign in</a>}{activeScreen !== "signup" && activeScreen !== "forgot" && <a href="/signup">Create account</a>}{activeScreen !== "forgot" && <a href="/forgot-password">Forgot password?</a>}</div>
   </AuthShell>;
 }
