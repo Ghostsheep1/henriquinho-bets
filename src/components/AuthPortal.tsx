@@ -39,6 +39,11 @@ export default function AuthPortal({ screen = "login", redirectAuthenticated = f
     const requested = params.get("next");
     setDestination(requested?.startsWith("/") ? requested : "/");
     if (screen === "verify") setEmail(params.get("email") ?? "");
+    const confirmation = params.get("confirmation");
+    if (confirmation === "success") setNotice("Your email is confirmed. Finishing your sign-in now…");
+    if (confirmation === "expired") setError("That confirmation link has expired or was already used. Request a fresh email below.");
+    if (confirmation === "missing") setError("That link is incomplete. Please use the complete link in the newest confirmation email.");
+    if (confirmation === "unavailable") setError("Email confirmation is temporarily unavailable. Please try again in a moment.");
   }, []);
 
   useEffect(() => {
